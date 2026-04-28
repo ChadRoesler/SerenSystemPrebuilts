@@ -11,8 +11,6 @@ Building some of this shit from source on the Jetson takes forever, so here are 
 | `torch-2.1.0-cp310-*.whl` | PyTorch 2.1.0 wheel for Python 3.10, built for Volta/Jetson |
 | `torchvision-*.whl` | Matching torchvision wheel |
 | `llama-server` | llama.cpp server binary |
-| `Python-3.10.14` | CPython 3.10.14 built for aarch64 |
-| `SQLite 3.45` | SQLite 3.45 built for aarch64 |
 
 ## Target Platform
 
