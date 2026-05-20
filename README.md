@@ -1,4 +1,4 @@
-# Nvidia Jetson Prebuilt Packages (Xavier + Orin)
+# Seren System Prebuilts (Xavier + Orin + Host)
 
 Building this shit from source on Jetson takes forever, so this repo is the shortcut: prebuilt artifacts for Xavier and Orin Nano.
 
@@ -6,6 +6,7 @@ Current targets:
 
 - Jetson AGX Xavier (JetPack 5 / Volta)
 - Jetson Orin Nano (JetPack 6 / Ampere)
+- Ubuntu 20.04 x86_64 (focal)
 
 ## What This Builds
 
