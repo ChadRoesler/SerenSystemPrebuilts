@@ -1,6 +1,6 @@
 # Seren System Prebuilts (Xavier + Orin + Host)
 
-Building this shit from source on Jetson takes forever, so this repo is the shortcut: prebuilt artifacts for Xavier and Orin Nano.
+Building this shit from source on Jetson takes forever, and DeadSnakes doesnt have a Python 3.10 for Ubunutu 20.04, which is required to flash a Xavier, so this repo is the shortcut: prebuilt artifacts for Xavier, Orin Nano, and your Host.
 
 Current targets:
 
@@ -10,6 +10,8 @@ Current targets:
 
 ## What This Builds
 
+### Jetson Builds
+
 | Artifact | Notes |
 |---|---|
 | `llama-server-<platform>-aarch64` | llama.cpp server binary built with CUDA for the detected platform |
@@ -18,6 +20,15 @@ Current targets:
 | `gasket-<jp>-<platform>-aarch64.ko` | Coral TPU gasket kernel module |
 | `apex-<jp>-<platform>-aarch64.ko` | Coral TPU apex kernel module |
 | `coral-<jp>-<platform>.manifest` | Build manifest with kernel/version metadata for module validation |
+| `python3.10-<jp>-<platform>-aarch64.tar.gz` | Python 3.10 |
+| `sqlite3.45-<jp>-<platform>-aarch64.tar.gz` | SQLite for use for ChromaDB |
+
+### Host Builds
+
+| Artifact | Notes |
+|---|---|
+| `python3.10-<jp>-<platform>-aarch64.tar.gz` | Python 3.10 |
+| `sqlite3.45-<jp>-<platform>-aarch64.tar.gz` | SQLite for use for ChromaDB |
 
 ## Platform Detection and Tags
 
@@ -38,15 +49,17 @@ Example output names:
 Build everything:
 
 ```bash
-bash build-prebuilts.sh --all
+bash build-jetson-prebuilts.sh --all
+bash build-host-prebuilts.sh --all
 ```
 
 Build only what you want:
 
 ```bash
-bash build-prebuilts.sh --llama --coral
-bash build-prebuilts.sh --pytorch --torchvision
-bash build-prebuilts.sh --coral
+bash build-jetson-prebuilts.sh --llama --coral
+bash build-jetson-prebuilts.sh --pytorch --torchvision
+bash build-jetson-prebuilts.sh --coral
+bash build-host-prebuilts.sh --python
 ```
 
 Useful options:
@@ -59,6 +72,7 @@ Useful options:
 
 - **Jetson AGX Xavier:** JetPack 5.x / L4T R35, Volta (`sm_72`)
 - **Jetson Orin Nano:** JetPack 6.x / L4T R36, Ampere (`sm_87`)
+- **Ubuntu 20.04:** Focal x86_64
 
 ## Notes
 
@@ -66,3 +80,4 @@ Useful options:
 - The script writes build metadata to `BUILD_INFO_<platform>_<jp>.txt` in the output directory so you can see exactly what got built.
 - If you want to build torchvision make sure you build pytorch first.
 - Use tmux when running it on headless when doing pytorch.
+- If you are Python and need Sqlite make sureyou build sqlite first.

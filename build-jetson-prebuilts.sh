@@ -24,10 +24,10 @@
 #
 # Usage:
 #   tmux new -s build
-#   bash build-prebuilts.sh --all                    # everything
-#   bash build-prebuilts.sh --llama --coral          # just two
-#   bash build-prebuilts.sh --pytorch --torchvision  # ML stack only
-#   bash build-prebuilts.sh --coral                  # Coral .ko modules only
+#   bash build-jetson-prebuilts.sh --all                    # everything
+#   bash build-jetson-prebuilts.sh --llama --coral          # just two
+#   bash build-jetson-prebuilts.sh --pytorch --torchvision  # ML stack only
+#   bash build-jetson-prebuilts.sh --coral                  # Coral .ko modules only
 #
 # Output: $PREBUILT_DIR (default /mnt/nvme/prebuilt, falls back to ~/prebuilt)
 # Resumable: re-run after a failure, completed phases skip
@@ -52,6 +52,8 @@ BUILD_LLAMA=false
 BUILD_PYTORCH=false
 BUILD_TORCHVISION=false
 BUILD_CORAL=false
+BUILD_PYTHON=false
+BUILD_SQLITE=false
 USER_BUILD_DIR=""
 USER_OUTPUT_DIR=""
 USER_MAX_JOBS=""
@@ -62,15 +64,23 @@ Usage: $0 [BUILD FLAGS] [OPTIONS]
 
 Build flags (combine freely):
   --llama              Build llama-server binary (~10 min)
-  --pytorch            Build PyTorch 2.1.0 cp310 wheel (~2-4 hours, RAM hungry)
-  --torchvision        Build torchvision 0.16.0 cp310 wheel (~30 min, needs torch installed)
+  --pytorch            Build PyTorch wheel (~2-4 hours, RAM hungry)
+                       Version: 2.1.0 on jp5/Xavier, 2.3.1 on jp6/Orin
+                       (CUDA 12.6 broke 2.1.0's Thrust calls)
+  --torchvision        Build torchvision wheel (~30 min, needs torch installed)
+                       Version: 0.16.0 on jp5/Xavier, 0.18.1 on jp6/Orin
   --coral              Build Coral TPU kernel modules (gasket + apex, ~5 min)
-  --all                Build everything
+  --python             Build Python 3.10 tarball (Xavier-only, ~30 min)
+                       Skipped on Nano - JetPack 6 ships Python 3.10 native
+  --sqlite             Build SQLite 3.45 tarball (Xavier-only, ~5 min)
+                       Skipped on Nano - Ubuntu 22.04 ships SQLite 3.37+
+  --all                Build llama + pytorch + torchvision + coral
+                       (NOT --python/--sqlite - request those explicitly)
 
 Options:
   --build-dir DIR      Where source trees get cloned (~30GB for pytorch).
                        Default: /mnt/nvme if mounted, else \$HOME.
-                       USE THIS on Xavier — eMMC is only 32GB and pytorch
+                       USE THIS on Xavier - eMMC is only 32GB and pytorch
                        source + objects will fill it.
   --output-dir DIR     Where finished artifacts get staged.
                        Default: /mnt/nvme/prebuilt if mounted, else ~/prebuilt.
@@ -102,6 +112,8 @@ while [[ $# -gt 0 ]]; do
         --pytorch)      BUILD_PYTORCH=true; shift ;;
         --torchvision)  BUILD_TORCHVISION=true; shift ;;
         --coral)        BUILD_CORAL=true; shift ;;
+        --python)       BUILD_PYTHON=true; shift ;;
+        --sqlite)       BUILD_SQLITE=true; shift ;;
         --all)          BUILD_LLAMA=true; BUILD_PYTORCH=true; BUILD_TORCHVISION=true; BUILD_CORAL=true; shift ;;
         --build-dir)    USER_BUILD_DIR="$2"; shift 2 ;;
         --output-dir)   USER_OUTPUT_DIR="$2"; shift 2 ;;
@@ -111,8 +123,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if ! $BUILD_LLAMA && ! $BUILD_PYTORCH && ! $BUILD_TORCHVISION && ! $BUILD_CORAL; then
-    fail "No build flag given. Pass --all or specific --llama/--pytorch/--torchvision/--coral. Try -h."
+if ! $BUILD_LLAMA && ! $BUILD_PYTORCH && ! $BUILD_TORCHVISION && ! $BUILD_CORAL \
+   && ! $BUILD_PYTHON && ! $BUILD_SQLITE; then
+    fail "No build flag given. Pass --all or specific --llama/--pytorch/--torchvision/--coral/--python/--sqlite. Try -h."
 fi
 
 # Validate --max-jobs if provided
@@ -137,12 +150,22 @@ detect_platform() {
             PLATFORM_TAG="xavier"
             CUDA_ARCH="72"
             TORCH_ARCH_LIST="7.2"
+            # PyTorch 2.1.0 is the latest version that builds cleanly against
+            # the CUDA 12.2 toolkit on JetPack 5.1.x.
+            PYTORCH_VERSION="2.1.0"
+            TORCHVISION_VERSION="0.16.0"
             ;;
         R36)
             JP_FAMILY="jp6"
             PLATFORM_TAG="orin"
             CUDA_ARCH="87"
             TORCH_ARCH_LIST="8.7"
+            # PyTorch 2.1.0 fails on CUDA 12.6 (JetPack 6) because Thrust
+            # removed the primitive-type swap() overload that 2.1.0's
+            # LinearAlgebra.cu calls. Fixed upstream around 2.3.0.
+            # Pin to 2.3.1 (last 2.3 patch) + matching torchvision 0.18.1.
+            PYTORCH_VERSION="2.3.1"
+            TORCHVISION_VERSION="0.18.1"
             ;;
         *)
             warn "Could not detect JetPack version from /etc/nv_tegra_release"
@@ -151,6 +174,8 @@ detect_platform() {
             PLATFORM_TAG="xavier"
             CUDA_ARCH="72"
             TORCH_ARCH_LIST="7.2"
+            PYTORCH_VERSION="2.1.0"
+            TORCHVISION_VERSION="0.16.0"
             ;;
     esac
     KERNEL_VER=$(uname -r)
@@ -167,11 +192,11 @@ elif [ -d /mnt/nvme ]; then
     PREBUILT_DIR="/mnt/nvme/prebuilt"
 else
     PREBUILT_DIR="$HOME/prebuilt"
-    warn "No /mnt/nvme — using $PREBUILT_DIR (make sure you have ~30GB free)"
+    warn "No /mnt/nvme - using $PREBUILT_DIR (make sure you have ~30GB free)"
 fi
 
 # Build dir: where pytorch/torchvision source trees get cloned + compiled
-# This is where space goes — pytorch alone needs ~25GB during build.
+# This is where space goes - pytorch alone needs ~25GB during build.
 if [ -n "$USER_BUILD_DIR" ]; then
     BUILD_DIR="$USER_BUILD_DIR"
 elif [ -d /mnt/nvme ]; then
@@ -190,14 +215,14 @@ mkdir -p "$BUILD_DIR"    || fail "Cannot create build dir:  $BUILD_DIR"
 if $BUILD_PYTORCH || $BUILD_TORCHVISION; then
     BUILD_FS_AVAIL_GB=$(df -BG "$BUILD_DIR" | awk 'NR==2 {gsub("G",""); print $4}')
     if [ -n "$BUILD_FS_AVAIL_GB" ] && [ "$BUILD_FS_AVAIL_GB" -lt 30 ] 2>/dev/null; then
-        warn "Build dir $BUILD_DIR has only ${BUILD_FS_AVAIL_GB}GB free — pytorch needs ~25GB."
+        warn "Build dir $BUILD_DIR has only ${BUILD_FS_AVAIL_GB}GB free - pytorch needs ~25GB."
         warn "If this is the eMMC, pass --build-dir /mnt/nvme/build or similar."
-        warn "Continuing in 5 seconds — Ctrl-C to abort..."
+        warn "Continuing in 5 seconds - Ctrl-C to abort..."
         sleep 5
     fi
 fi
 
-# MAX_JOBS resolution — used only for pytorch/torchvision
+# MAX_JOBS resolution - used only for pytorch/torchvision
 if [ -n "$USER_MAX_JOBS" ]; then
     RESOLVED_MAX_JOBS="$USER_MAX_JOBS"
 else
@@ -220,7 +245,7 @@ phase_mark() {
 }
 phase_skip_if_done() {
     if [ "$(phase_done "$1")" = "true" ]; then
-        info "Phase '$1' already complete — skipping (delete $STATE_FILE to redo)"
+        info "Phase '$1' already complete - skipping (delete $STATE_FILE to redo)"
         return 0
     fi
     return 1
@@ -237,6 +262,7 @@ echo ""
 log "Platform:    $PLATFORM_TAG ($JP_FAMILY)"
 log "Kernel:      $KERNEL_VER"
 log "CUDA arch:   $CUDA_ARCH"
+log "PyTorch:     $PYTORCH_VERSION (torchvision $TORCHVISION_VERSION)"
 log "Output dir:  $PREBUILT_DIR"
 log "Build dir:   $BUILD_DIR"
 log "Max jobs:    $RESOLVED_MAX_JOBS$([ -z "$USER_MAX_JOBS" ] && echo ' (auto, all cores)' || echo ' (user set)')"
@@ -251,11 +277,11 @@ $BUILD_PYTORCH     && { need_python310=true; need_nvcc=true; }
 $BUILD_TORCHVISION && { need_python310=true; need_nvcc=true; }
 
 if $need_python310; then
-    command -v python3.10 &>/dev/null || fail "python3.10 required for pytorch/torchvision build — run from-zero script first"
+    command -v python3.10 &>/dev/null || fail "python3.10 required for pytorch/torchvision build - run from-zero script first"
     log "python3.10: $(python3.10 --version 2>&1)"
 fi
 if $need_nvcc; then
-    command -v nvcc &>/dev/null || fail "nvcc required — CUDA toolkit not installed"
+    command -v nvcc &>/dev/null || fail "nvcc required - CUDA toolkit not installed"
     log "nvcc:        $(nvcc --version | grep release | awk '{print $6}' | cut -d',' -f1)"
 fi
 
@@ -317,13 +343,14 @@ if $BUILD_LLAMA; then
 fi
 
 # ═════════════════════════════════════════════════════════════
-# PyTorch 2.1.0 (cp310)
+# PyTorch (version pinned per platform - see detect_platform)
 # ═════════════════════════════════════════════════════════════
 build_pytorch() {
-    log "Building PyTorch 2.1.0 cp310 (${PLATFORM_TAG}, arch $TORCH_ARCH_LIST)..."
+    log "Building PyTorch ${PYTORCH_VERSION} cp310 (${PLATFORM_TAG}, arch $TORCH_ARCH_LIST)..."
 
-    # numpy 1.24.4 for build — PyTorch 2.1.0 uses numpy 1.x C API
-    # numpy 1.26+ ships 2.0-style headers (no elsize on PyArray_Descr)
+    # numpy 1.24.4 for build - PyTorch 2.1-2.3 uses numpy 1.x C API.
+    # numpy 1.26+ ships 2.0-style headers (no elsize on PyArray_Descr) which
+    # break the build for these PyTorch versions.
     python3.10 -m pip install --user \
         "numpy==1.24.4" \
         scikit-build ninja pyyaml \
@@ -338,14 +365,14 @@ build_pytorch() {
     export USE_MKLDNN=0
     export USE_XNNPACK=0
     export TORCH_CUDA_ARCH_LIST="$TORCH_ARCH_LIST"
-    export PYTORCH_BUILD_VERSION=2.1.0
+    export PYTORCH_BUILD_VERSION="$PYTORCH_VERSION"
     export PYTORCH_BUILD_NUMBER=1
     export MAX_JOBS="$RESOLVED_MAX_JOBS"
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
     cd "$BUILD_DIR"
     rm -rf pytorch
-    git clone --recursive --branch v2.1.0 --depth 1 https://github.com/pytorch/pytorch
+    git clone --recursive --branch "v${PYTORCH_VERSION}" --depth 1 https://github.com/pytorch/pytorch
     cd pytorch
     python3.10 -m pip install --user -r requirements.txt
 
@@ -353,7 +380,7 @@ build_pytorch() {
     python3.10 setup.py bdist_wheel
 
     local WHEEL; WHEEL=$(ls dist/torch-*.whl 2>/dev/null | head -1)
-    [ -z "$WHEEL" ] && fail "PyTorch build failed — no wheel produced"
+    [ -z "$WHEEL" ] && fail "PyTorch build failed - no wheel produced"
 
     cp "$WHEEL" "$PREBUILT_DIR/"
     echo "pytorch: $(basename "$WHEEL")" >> "$BUILD_INFO"
@@ -372,14 +399,14 @@ if $BUILD_PYTORCH; then
 fi
 
 # ═════════════════════════════════════════════════════════════
-# torchvision 0.16.0 (cp310)
+# torchvision (version pinned per platform - see detect_platform)
 # ═════════════════════════════════════════════════════════════
 build_torchvision() {
-    log "Building torchvision 0.16.0 cp310 (${PLATFORM_TAG}, arch $TORCH_ARCH_LIST)..."
+    log "Building torchvision ${TORCHVISION_VERSION} cp310 (${PLATFORM_TAG}, arch $TORCH_ARCH_LIST)..."
 
     # Verify torch is importable
     python3.10 -c "import torch; print('torch:', torch.__version__)" 2>/dev/null || \
-        fail "torch not installed in python3.10 — run --pytorch first or pip install the wheel"
+        fail "torch not installed in python3.10 - run --pytorch first or pip install the wheel"
 
     export TORCH_CUDA_ARCH_LIST="$TORCH_ARCH_LIST"
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -387,12 +414,12 @@ build_torchvision() {
 
     cd "$BUILD_DIR"
     rm -rf torchvision
-    git clone --branch v0.16.0 --depth 1 https://github.com/pytorch/vision torchvision
+    git clone --branch "v${TORCHVISION_VERSION}" --depth 1 https://github.com/pytorch/vision torchvision
     cd torchvision
     python3.10 setup.py bdist_wheel
 
     local WHEEL; WHEEL=$(ls dist/torchvision-*.whl 2>/dev/null | head -1)
-    [ -z "$WHEEL" ] && fail "torchvision build failed — no wheel produced"
+    [ -z "$WHEEL" ] && fail "torchvision build failed - no wheel produced"
 
     cp "$WHEEL" "$PREBUILT_DIR/"
     echo "torchvision: $(basename "$WHEEL")" >> "$BUILD_INFO"
@@ -419,7 +446,7 @@ build_coral() {
     # Kernel headers required
     sudo apt install -y nvidia-l4t-kernel-headers build-essential 2>/dev/null || \
         sudo apt install -y "linux-headers-$KERNEL_VER" build-essential 2>/dev/null || \
-        warn "Could not install kernel headers via standard packages — module build may fail"
+        warn "Could not install kernel headers via standard packages - module build may fail"
 
     cd /tmp
     rm -rf gasket-driver
@@ -466,6 +493,159 @@ if $BUILD_CORAL; then
     if phase_skip_if_done "coral_${JP_FAMILY}_${PLATFORM_TAG}"; then :; else
         build_coral
         phase_mark "coral_${JP_FAMILY}_${PLATFORM_TAG}"
+    fi
+fi
+
+# ═════════════════════════════════════════════════════════════
+# Python 3.10 tarball (Xavier-only - Nano has it native via JetPack 6)
+# ═════════════════════════════════════════════════════════════
+build_python() {
+    if [ "$JP_FAMILY" != "jp5" ]; then
+        warn "Python tarball is Xavier-only - JetPack 6 ships Python 3.10 native. Skipping."
+        return 0
+    fi
+
+    log "Building Python 3.10 for jp5/xavier..."
+
+    # Runtime libs that Python 3.10 links against - also needed at install time
+    sudo apt install -y \
+        zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
+        libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev \
+        build-essential
+
+    cd "$BUILD_DIR"
+    sudo rm -rf Python-3.10.14 Python-3.10.14.tgz 2>/dev/null || true
+    wget -q --show-progress https://www.python.org/ftp/python/3.10.14/Python-3.10.14.tgz
+    tar xzf Python-3.10.14.tgz
+    cd Python-3.10.14
+
+    # If /usr/local/lib has a newer libsqlite3.so (from build_sqlite or a
+    # pre-existing source install), point the Python build at it so the
+    # resulting `import sqlite3` reports the modern version. Without this,
+    # CPython links against whatever Ubuntu's libsqlite3-dev ships - 3.31
+    # on 20.04, which ChromaDB rejects.
+    #
+    # Note: must export these as separate vars (not jam them into a single
+    # string passed to `env`). LDFLAGS contains spaces between flags, and
+    # word-splitting that string makes `env` try to treat each flag as its
+    # own var assignment, which fails on `-Wl,-rpath,/usr/local/lib`.
+    if [ -f /usr/local/lib/libsqlite3.so ] && [ -f /usr/local/include/sqlite3.h ]; then
+        log "Detected /usr/local SQLite - linking Python against it"
+        export LDFLAGS="-L/usr/local/lib -Wl,-rpath,/usr/local/lib"
+        export CPPFLAGS="-I/usr/local/include"
+        # Also help configure find sqlite3 via pkg-config style discovery
+        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+    else
+        warn "No /usr/local SQLite found - Python will link against system libsqlite3"
+        warn "If you want a modern bundled sqlite3 module, run --sqlite BEFORE --python"
+    fi
+
+    ./configure --enable-optimizations --prefix=/usr/local
+    make -j"$RESOLVED_MAX_JOBS"
+
+    # Sanity-check: make sure the build actually picked up modern sqlite3
+    local PY_SQLITE_VER
+    PY_SQLITE_VER=$(./python -c "import sqlite3; print(sqlite3.sqlite_version)" 2>/dev/null || echo "missing")
+    log "Built Python's sqlite3 module reports version: $PY_SQLITE_VER"
+
+    # Install into a staging dir so we can tarball just the new files,
+    # not whatever else lives in /usr/local on the build box.
+    local STAGE_DIR="$BUILD_DIR/python-stage"
+    sudo rm -rf "$STAGE_DIR"
+    mkdir -p "$STAGE_DIR"
+    make install DESTDIR="$STAGE_DIR"
+
+    # Bootstrap pip INTO the staged tree so the resulting tarball is
+    # self-sufficient. `make install` doesn't run ensurepip, so without this
+    # step downstream consumers untar the file and immediately hit
+    # "No module named pip" the first time they try to install anything.
+    log "Bootstrapping pip into the staged Python tree..."
+    sudo "$STAGE_DIR/usr/local/bin/python3.10" -m ensurepip --upgrade --root="$STAGE_DIR" 2>/dev/null || \
+        sudo "$STAGE_DIR/usr/local/bin/python3.10" -m ensurepip --upgrade
+    sudo "$STAGE_DIR/usr/local/bin/python3.10" -m pip install --upgrade pip wheel setuptools \
+        --root="$STAGE_DIR" --no-warn-script-location 2>/dev/null || true
+
+    # The DESTDIR install creates $STAGE_DIR/usr/local/{bin,lib,include,share}
+    # Strip pycache + binaries to shrink the tarball
+    sudo find "$STAGE_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    sudo strip "$STAGE_DIR/usr/local/bin/python3.10" 2>/dev/null || true
+
+    local OUT="$PREBUILT_DIR/python3.10-jp5-xavier-aarch64.tar.gz"
+    cd "$STAGE_DIR/usr/local"
+    sudo tar czf "$OUT" .
+    sudo chown "${SUDO_USER:-$USER}:${SUDO_USER:-$USER}" "$OUT" 2>/dev/null || true
+
+    echo "python: $(basename "$OUT") ($(du -h "$OUT" | cut -f1))" >> "$BUILD_INFO"
+    log "Python tarball saved → $OUT ✓"
+
+    cd ~
+    sudo rm -rf "$BUILD_DIR/Python-3.10.14" "$BUILD_DIR/Python-3.10.14.tgz" "$STAGE_DIR"
+}
+
+# Dispatch for SQLite + Python is below, after build_sqlite is defined.
+# (Bash needs function definitions to precede their calls.)
+
+# ═════════════════════════════════════════════════════════════
+# SQLite 3.45 tarball (Xavier-only - Ubuntu 22.04 on Nano ships 3.37+)
+# ═════════════════════════════════════════════════════════════
+build_sqlite() {
+    if [ "$JP_FAMILY" != "jp5" ]; then
+        warn "SQLite tarball is Xavier-only - Ubuntu 22.04 ships SQLite 3.37+. Skipping."
+        return 0
+    fi
+
+    log "Building SQLite 3.45 for jp5/xavier..."
+
+    cd "$BUILD_DIR"
+    sudo rm -rf sqlite-autoconf-3450000 sqlite-autoconf-3450000.tar.gz 2>/dev/null || true
+    wget -q --show-progress https://www.sqlite.org/2024/sqlite-autoconf-3450000.tar.gz
+    tar xzf sqlite-autoconf-3450000.tar.gz
+    cd sqlite-autoconf-3450000
+    ./configure --prefix=/usr/local
+    make -j"$RESOLVED_MAX_JOBS"
+
+    local STAGE_DIR="$BUILD_DIR/sqlite-stage"
+    sudo rm -rf "$STAGE_DIR"
+    mkdir -p "$STAGE_DIR"
+    make install DESTDIR="$STAGE_DIR"
+
+    local OUT="$PREBUILT_DIR/sqlite3.45-jp5-xavier-aarch64.tar.gz"
+    cd "$STAGE_DIR/usr/local"
+    sudo tar czf "$OUT" .
+    sudo chown "${SUDO_USER:-$USER}:${SUDO_USER:-$USER}" "$OUT" 2>/dev/null || true
+
+    # ALSO install to /usr/local on the build host. Required so a subsequent
+    # build_python in the same pipeline run can link Python against modern
+    # libsqlite3 (which is the whole point - older system libsqlite3 makes
+    # Python's bundled sqlite3 module too old for ChromaDB).
+    cd "$BUILD_DIR/sqlite-autoconf-3450000"
+    sudo make install
+    sudo ldconfig
+    log "SQLite 3.45 also installed to /usr/local on build host ✓"
+
+    echo "sqlite: $(basename "$OUT") ($(du -h "$OUT" | cut -f1))" >> "$BUILD_INFO"
+    log "SQLite tarball saved → $OUT ✓"
+
+    cd ~
+    sudo rm -rf "$BUILD_DIR/sqlite-autoconf-3450000" "$BUILD_DIR/sqlite-autoconf-3450000.tar.gz" "$STAGE_DIR"
+}
+
+# ═════════════════════════════════════════════════════════════
+# Dispatch - SQLite must run BEFORE Python in the same pipeline so
+# build_python can link against the modern libsqlite3 in /usr/local.
+# Both functions must be defined before this point (they are).
+# ═════════════════════════════════════════════════════════════
+if $BUILD_SQLITE; then
+    if phase_skip_if_done "sqlite_${JP_FAMILY}_${PLATFORM_TAG}"; then :; else
+        build_sqlite
+        phase_mark "sqlite_${JP_FAMILY}_${PLATFORM_TAG}"
+    fi
+fi
+
+if $BUILD_PYTHON; then
+    if phase_skip_if_done "python_${JP_FAMILY}_${PLATFORM_TAG}"; then :; else
+        build_python
+        phase_mark "python_${JP_FAMILY}_${PLATFORM_TAG}"
     fi
 fi
 
