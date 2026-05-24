@@ -211,6 +211,18 @@ mkdir -p "$BUILD_DIR"    || fail "Cannot create build dir:  $BUILD_DIR"
 [ -w "$PREBUILT_DIR" ]   || fail "Output dir not writable: $PREBUILT_DIR"
 [ -w "$BUILD_DIR" ]      || fail "Build dir not writable:  $BUILD_DIR"
 
+# Redirect ALL temp writes off the eMMC, once, for every build step.
+# Compilers (gcc/nvcc), linkers (ld/collect2), cmake, and python setup.py all
+# scribble intermediate files to $TMPDIR - which defaults to /tmp, on Jetson
+# the tiny ~32GB eMMC root. A big static link or a pytorch build blows that
+# out with "No space left on device", surfacing as a misleading
+# "collect2: ld returned 1". Setting TMPDIR here means every child process
+# inherits it - no per-build-step export needed, and any build step added
+# later is automatically covered. TMPDIR is the var the GNU toolchain
+# actually honors on Linux; TMP/TEMP are Windows-isms we don't need.
+export TMPDIR="$BUILD_DIR/tmp"
+mkdir -p "$TMPDIR"
+
 # Sanity check: warn if build dir is on eMMC (small) and we're building pytorch
 if $BUILD_PYTORCH || $BUILD_TORCHVISION; then
     BUILD_FS_AVAIL_GB=$(df -BG "$BUILD_DIR" | awk 'NR==2 {gsub("G",""); print $4}')
@@ -316,14 +328,34 @@ build_llama() {
     git clone https://github.com/ggml-org/llama.cpp
     cd llama.cpp
 
+    # Build ONLY the server target. llama.cpp builds its full test suite +
+    # every example by default - none of which we ship. Those test binaries
+    # are what actually filled /tmp and died (llama-server itself had
+    # already linked by then). Skipping them makes the build faster, smaller,
+    # and removes the disk-pressure failure entirely.
     cmake -B build \
         -DGGML_CUDA=ON \
         -DGGML_CUDA_F16=on \
         -DGGML_CUDA_FA_ALL_QUANTS=ON \
-        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH"
-    cmake --build build --config Release -j"$(nproc)"
+        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON
+    # Build just the server target - not the "all" target. This is the only
+    # artifact we package, and it pulls in exactly the libs it needs.
+    cmake --build build --config Release -j"$(nproc)" --target llama-server
 
     [ -f build/bin/llama-server ] || fail "llama.cpp build failed"
+
+    # Guard: refuse to ship a binary that still has shared llama/ggml deps.
+    # BUILD_SHARED_LIBS=OFF should make this impossible, but a future
+    # llama.cpp change could reintroduce a shared sub-target. Fail at BUILD
+    # time, not at the buddy's launch time.
+    if ldd build/bin/llama-server 2>/dev/null | grep -qiE "libllama|libggml|libmtmd"; then
+        ldd build/bin/llama-server | grep -iE "libllama|libggml|libmtmd" >&2
+        fail "llama-server still has shared llama/ggml deps - static link didn't take. Refusing to ship incomplete binary."
+    fi
 
     local OUT="$PREBUILT_DIR/llama-server-${PLATFORM_TAG}-aarch64"
     cp build/bin/llama-server "$OUT"
@@ -364,6 +396,13 @@ build_pytorch() {
     export USE_PYTORCH_QNNPACK=0
     export USE_MKLDNN=0
     export USE_XNNPACK=0
+    # CUDA 12.x (JetPack 6) made NVTX header-only and removed the standalone
+    # libnvToolsExt. PyTorch 2.3.1's cuda.cmake still hunts for the old lib
+    # and hard-fails ("Failed to find nvToolsExt") if it can't. USE_SYSTEM_NVTX
+    # tells PyTorch to use the header-only NVTX shipped in the CUDA toolkit
+    # instead of looking for the deleted library. Harmless on jp5/CUDA 12.2
+    # too (the header's present there as well), so we set it unconditionally.
+    export USE_SYSTEM_NVTX=1
     export TORCH_CUDA_ARCH_LIST="$TORCH_ARCH_LIST"
     export PYTORCH_BUILD_VERSION="$PYTORCH_VERSION"
     export PYTORCH_BUILD_NUMBER=1
@@ -374,6 +413,46 @@ build_pytorch() {
     rm -rf pytorch
     git clone --recursive --branch "v${PYTORCH_VERSION}" --depth 1 https://github.com/pytorch/pytorch
     cd pytorch
+
+    # ── Patch: CUDA 12.x nvToolsExt target ──
+    # PyTorch 2.3.1's cmake/public/cuda.cmake hard-errors with
+    # "Failed to find nvToolsExt" if the CMake target CUDA::nvToolsExt
+    # doesn't exist. On CUDA 12.x (JetPack 6) NVTX went header-only and
+    # find_package(CUDAToolkit) stopped defining that target (the modern one
+    # is CUDA::nvtx3). USE_SYSTEM_NVTX=1 alone does NOT fix this - the TARGET
+    # check runs regardless. So we create a stand-in interface target that
+    # aliases the header-only nvtx3, satisfying both the existence check and
+    # any downstream `target_link_libraries(... CUDA::nvToolsExt)`. Harmless
+    # on CUDA 12.2 (jp5) too - if CUDA::nvToolsExt already exists there, the
+    # NOT TARGET guard means this block never runs. Idempotent: only patches
+    # if the fatal line is still present.
+    if grep -q 'message(FATAL_ERROR "Failed to find nvToolsExt")' cmake/public/cuda.cmake; then
+        python3 - << 'NVTX_PATCH'
+p = "cmake/public/cuda.cmake"
+s = open(p).read()
+old = '''if(NOT TARGET CUDA::nvToolsExt)
+  message(FATAL_ERROR "Failed to find nvToolsExt")
+endif()'''
+new = '''if(NOT TARGET CUDA::nvToolsExt)
+  # [seren patch] CUDA 12.x made NVTX header-only and dropped the
+  # CUDA::nvToolsExt target (modern target is CUDA::nvtx3). Create a
+  # stand-in so PyTorch 2.3.1 stops hard-erroring; alias header-only nvtx3.
+  add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+  if(TARGET CUDA::nvtx3)
+    set_target_properties(CUDA::nvToolsExt PROPERTIES
+      INTERFACE_LINK_LIBRARIES CUDA::nvtx3)
+  endif()
+endif()'''
+if old in s:
+    open(p, "w").write(s.replace(old, new))
+    print("[seren] cuda.cmake nvToolsExt patch applied")
+else:
+    print("[seren] WARNING: nvToolsExt block not matched - cuda.cmake may have changed; build may fail at line ~70")
+NVTX_PATCH
+    else
+        log "cuda.cmake nvToolsExt fatal-check not present (already patched or different pytorch version) - skipping patch"
+    fi
+
     python3.10 -m pip install --user -r requirements.txt
 
     log "Starting PyTorch build (this takes 2-4 hours)..."
@@ -448,7 +527,7 @@ build_coral() {
         sudo apt install -y "linux-headers-$KERNEL_VER" build-essential 2>/dev/null || \
         warn "Could not install kernel headers via standard packages - module build may fail"
 
-    cd /tmp
+    cd "$BUILD_DIR"
     rm -rf gasket-driver
     git clone https://github.com/google/gasket-driver.git
     cd gasket-driver/src
@@ -486,7 +565,7 @@ build_coral() {
     log "  $APEX_OUT"
     log "  $MANIFEST"
     cd ~
-    rm -rf /tmp/gasket-driver
+    rm -rf "$BUILD_DIR/gasket-driver"
 }
 
 if $BUILD_CORAL; then
@@ -665,7 +744,7 @@ ls -lh "$PREBUILT_DIR/" | grep -v '^total' | grep -v '^\.build'
 echo ""
 cat "$BUILD_INFO"
 echo ""
-log "Upload to release: https://github.com/ChadRoesler/Nvidia_Jetson_Prebuilt/releases"
+log "Upload to release: https://github.com/ChadRoesler/SerenSystemPrebuilts/releases"
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  ${ELAPSED} minutes. Never build these again.${NC}"

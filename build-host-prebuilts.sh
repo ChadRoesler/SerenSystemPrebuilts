@@ -2,7 +2,7 @@
 # ══════════════════════════════════════════════════════════════════════
 #  build-host-prebuilts.sh — host (x86_64 focal) artifacts for Seren
 #
-#  Companion to build-jetson-prebuilts.sh (which handles the aarch64 Jetson side).
+#  Companion to build-prebuilts.sh (which handles the aarch64 Jetson side).
 #  This one builds the artifacts the NON-Jetson host box needs - currently
 #  just the NUC, which is pinned to Ubuntu 20.04 because NVIDIA SDK Manager
 #  requires 20.04 to flash Xavier AGX boards.
@@ -17,10 +17,17 @@
 #    libsqlite3 that SerenMemory's service loads ahead of the system one
 #    via LD_LIBRARY_PATH.
 #
+#  WHY NOT JUST DOCKER:
+#    Considered, deferred deliberately. Going Docker for one service while
+#    the rest of the stack is native means two deployment models to reason
+#    about. That's a whole-stack decision for a future session, not a
+#    thing to back into while solving a sqlite version floor. For now:
+#    continuity with the prebuilt-artifact pattern already used for Jetson.
 #
 #  ARTIFACTS PRODUCED (staged into --output-dir):
 #    python-3.10.14-focal-x86_64.tar.gz   (extracts to /usr/local)
 #    libsqlite3-3.45.1-focal-x86_64.tar.gz (extracts to /usr/local)
+#    BUILD_INFO_host_focal.txt
 #
 #  RELEASE TAG: host-focal-x86_64
 #
