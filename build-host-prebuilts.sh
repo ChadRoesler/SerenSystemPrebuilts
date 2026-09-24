@@ -2,10 +2,11 @@
 # ══════════════════════════════════════════════════════════════════════
 #  build-host-prebuilts.sh — host (x86_64 focal) artifacts for Seren
 #
-#  Companion to build-prebuilts.sh (which handles the aarch64 Jetson side).
-#  This one builds the artifacts the NON-Jetson host box needs - currently
-#  just the NUC, which is pinned to Ubuntu 20.04 because NVIDIA SDK Manager
-#  requires 20.04 to flash Xavier AGX boards.
+#  Companion to build-jetson-prebuilts.sh (which handles the aarch64 Jetson
+#  side). This one builds the artifacts the NON-Jetson host box needs -
+#  currently just the NUC, which is pinned to Ubuntu 20.04 because NVIDIA SDK
+#  Manager's host OS must match the LOWEST edge-device OS it flashes, and a
+#  Xavier AGX is 20.04.
 #
 #  THE PROBLEM THIS SOLVES:
 #    Ubuntu 20.04 ships:
@@ -25,11 +26,16 @@
 #    continuity with the prebuilt-artifact pattern already used for Jetson.
 #
 #  ARTIFACTS PRODUCED (staged into --output-dir):
-#    python-3.10.14-focal-x86_64.tar.gz   (extracts to /usr/local)
-#    libsqlite3-3.45.1-focal-x86_64.tar.gz (extracts to /usr/local)
+#    python-3.10.14-focal-x86_64.tar.gz     (extracts to /usr/local)
+#    libsqlite3-3.45.1-focal-x86_64.tar.gz  (extracts to /usr/local)
+#    PROVENANCE-host-focal-x86_64.txt       the machine, the sources, the hashes
+#    SHA256SUMS                             sha256sum -c SHA256SUMS
 #    BUILD_INFO_host_focal.txt
 #
-#  RELEASE TAG: host-focal-x86_64
+#  Upstream tarballs are verified against lib/sources.sha256 before anything
+#  compiles - same table, same rule as the Jetson script.
+#
+#  RELEASE TAG: YYYYMMDD_host-focal-x86_64  (the build date; see README)
 #
 #  Usage:
 #    bash build-host-prebuilts.sh --all
@@ -38,6 +44,13 @@
 #    bash build-host-prebuilts.sh --all --output-dir ./out --build-dir /tmp/b
 # ══════════════════════════════════════════════════════════════════════
 set -euo pipefail
+
+# The verified fetch is shared with the Jetson script; it lives in lib/ beside
+# this file. Said here rather than as "fetch_verified: command not found".
+_HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -r "$_HOST_ROOT/lib/fetch.sh" ] || { echo "this script needs lib/ beside it (lib/fetch.sh, lib/sources.sha256)" >&2; exit 1; }
+# shellcheck source=lib/fetch.sh
+source "$_HOST_ROOT/lib/fetch.sh"
 
 # ── Versions (bump here, single source of truth) ──
 PYTHON_VERSION="${PYTHON_VERSION:-3.10.14}"
@@ -91,7 +104,7 @@ if [ -f /etc/os-release ]; then
     [ "${VERSION_CODENAME:-}" = "focal" ] || warn "OS codename is '${VERSION_CODENAME:-unknown}', not focal - build will target the running system's libc regardless"
 fi
 if [ -f /etc/nv_tegra_release ]; then
-    fail "this is a Jetson (found /etc/nv_tegra_release). Use build-prebuilts.sh, not the host script."
+    fail "this is a Jetson (found /etc/nv_tegra_release). Use build-jetson-prebuilts.sh, not the host script."
 fi
 
 mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
@@ -103,13 +116,56 @@ log "sqlite:   $SQLITE_VERSION (build=$DO_SQLITE)"
 
 INFO_FILE="$OUTPUT_DIR/BUILD_INFO_host_focal.txt"
 {
+    [ -s "$INFO_FILE" ] && echo ""
+    echo "== run: $(basename "$0") $*"
     echo "Seren host prebuilts — build info"
     echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "host_kernel: $(uname -r)"
     echo "host_arch: $ARCH"
     echo "host_os: ${PRETTY_NAME:-unknown}"
     echo "gcc: $(gcc --version 2>/dev/null | head -1 || echo 'n/a')"
-} > "$INFO_FILE"
+} >> "$INFO_FILE"
+
+# ── the records - same three the Jetson folders carry ──
+# The host artifacts had no checksum file and no provenance at all: two
+# tarballs and a build-info note, uploaded on trust. Same shape as the Jetson
+# side now, appended per run, never truncated.
+PROVENANCE="$OUTPUT_DIR/PROVENANCE-host-$PLATFORM.txt"
+SUMS="$OUTPUT_DIR/SHA256SUMS"
+if [ ! -s "$PROVENANCE" ]; then
+    {
+        echo "# SerenSystemPrebuilts provenance (host)"
+        echo "# Everything below was read from the machine that did the build."
+    } > "$PROVENANCE"
+fi
+{
+    echo ""
+    echo "# ══ run $(date -Iseconds) ══  $(basename "$0") $*"
+    echo "built            $(date -Iseconds)"
+    echo "host             $(uname -n)"
+    echo "platform         $PLATFORM"
+    echo "kernel           $(uname -r)"
+    echo "os               ${PRETTY_NAME:-unknown}"
+    echo "gcc              $(gcc --version 2>/dev/null | head -1 || echo absent)"
+    echo "baseline python  $PYTHON_VERSION"
+    echo "baseline sqlite  $SQLITE_VERSION"
+} >> "$PROVENANCE"
+touch "$SUMS"
+
+# record_artifact - name, size, sha256; one SHA256SUMS line per path.
+record_artifact() {
+    local f="$1" sum rel tmp
+    [ -f "$f" ] || return 0
+    sum="$(sha256sum "$f" | awk '{print $1}')"
+    rel="${f#"$OUTPUT_DIR"/}"
+    printf 'artifact %-42s %s  %s\n' "$rel" "$(stat -c%s "$f")" "$sum" >> "$PROVENANCE"
+    if grep -qF -- "  $rel" "$SUMS"; then
+        tmp="$(mktemp)"
+        awk -v p="$rel" 'index($0, "  " p) != length($0) - length(p) - 1 { print }' "$SUMS" > "$tmp"
+        mv "$tmp" "$SUMS"
+    fi
+    printf '%s  %s\n' "$sum" "$rel" >> "$SUMS"
+}
 
 # ══════════════════════════════════════════════════════════════════════
 #  SQLite — build FIRST if doing both, because we want Python to link
@@ -122,8 +178,10 @@ build_sqlite() {
     local url="https://www.sqlite.org/$SQLITE_URL_YEAR/sqlite-autoconf-$SQLITE_URL_VERSION.tar.gz"
 
     if [ ! -d "$src" ]; then
-        log "fetching $url"
-        curl -fSL -o "$tarball" "$url" || fail "could not fetch sqlite source"
+        local sha
+        sha="$(fetch_verified "$url" "$tarball")"
+        printf 'source %-14s %s\n' "sqlite" "$url" >> "$PROVENANCE"
+        printf '       %-14s sha256 %s\n' "" "$sha" >> "$PROVENANCE"
         tar xzf "$tarball" -C "$BUILD_DIR"
     fi
 
@@ -151,6 +209,7 @@ build_sqlite() {
     # Tar it rooted at usr/local so `tar xzf ... -C /` lands correctly.
     local out="$OUTPUT_DIR/libsqlite3-$SQLITE_VERSION-$PLATFORM.tar.gz"
     tar czf "$out" -C "$stage" usr/local
+    record_artifact "$out"
     log "wrote $out"
 
     {
@@ -171,8 +230,10 @@ build_python() {
     local url="https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz"
 
     if [ ! -d "$src" ]; then
-        log "fetching $url"
-        curl -fSL -o "$tarball" "$url" || fail "could not fetch python source"
+        local sha
+        sha="$(fetch_verified "$url" "$tarball")"
+        printf 'source %-14s %s\n' "python" "$url" >> "$PROVENANCE"
+        printf '       %-14s sha256 %s\n' "" "$sha" >> "$PROVENANCE"
         tar xzf "$tarball" -C "$BUILD_DIR"
     fi
 
@@ -214,6 +275,7 @@ build_python() {
 
     local out="$OUTPUT_DIR/python-$PYTHON_VERSION-$PLATFORM.tar.gz"
     tar czf "$out" -C "$stage" usr/local
+    record_artifact "$out"
     log "wrote $out"
 
     # Report what sqlite the built python sees (only meaningful if we can
@@ -233,9 +295,11 @@ build_python() {
 $DO_SQLITE && build_sqlite
 $DO_PYTHON && build_python
 
+record_artifact "$INFO_FILE"
 log "── done ──"
 log "artifacts in $OUTPUT_DIR:"
 ls -la "$OUTPUT_DIR"
+log "records: $(basename "$PROVENANCE"), SHA256SUMS  (verify: cd $OUTPUT_DIR && sha256sum -c SHA256SUMS)"
 log ""
-log "next: create/update the 'host-focal-x86_64' release tag on"
+log "next: upload this folder to a '$(date +%Y%m%d)_host-focal-x86_64' release tag on"
 log "  github.com/ChadRoesler/SerenSystemPrebuilts and upload these."

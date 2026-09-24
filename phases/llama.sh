@@ -18,20 +18,21 @@ build_llama() {
     # whose entire root filesystem is 32GB.
     cd "$BUILD_DIR"
     rm -rf llama.cpp
-    # PINNABLE, AND RECORDED EITHER WAY. This was a bare `git clone` with no
-    # ref and no depth - so the binary came from whatever master happened to be
-    # that minute, and nothing recorded which minute. --llama-ref pins it;
-    # record_source writes the resolved SHA down regardless, which is what makes
-    # the artifact reproducible instead of merely reproduced-once.
-    if [ -n "$USER_LLAMA_REF" ]; then
-        git clone https://github.com/ggml-org/llama.cpp
-        git -C llama.cpp checkout --quiet "$USER_LLAMA_REF" \
-            || fail "llama.cpp: no such ref '$USER_LLAMA_REF'"
-        log "llama.cpp pinned to $USER_LLAMA_REF"
+    # PINNED BY DEFAULT, AND RECORDED EITHER WAY. This was a bare `git clone`
+    # with no ref - the binary came from whatever master happened to be that
+    # minute. It gained --llama-ref, and then the default stayed "that minute",
+    # so every build that did not think to pass the flag was still
+    # unreproducible by construction. The default is now the commit in
+    # lib/pins.sh; `--llama-ref latest` is the explicit way to chase HEAD.
+    # record_source writes the resolved SHA down regardless.
+    git clone https://github.com/ggml-org/llama.cpp
+    if [ -n "$LLAMA_REF" ]; then
+        git -C llama.cpp checkout --quiet "$LLAMA_REF" \
+            || fail "llama.cpp: no such ref '$LLAMA_REF'"
+        log "llama.cpp pinned to $LLAMA_REF"
     else
-        git clone https://github.com/ggml-org/llama.cpp
-        warn "llama.cpp is UNPINNED (master HEAD). The exact commit is recorded"
-        warn "  in the provenance file; pass --llama-ref to reproduce this build."
+        warn "llama.cpp is UNPINNED (--llama-ref latest): master HEAD as of now."
+        warn "  The exact commit is recorded in the provenance; pin it there next time."
     fi
     record_source llama.cpp "$PWD/llama.cpp"
     cd llama.cpp

@@ -34,8 +34,10 @@ artifacts for an `sm_121` GPU. Pass `--platform spark` and it stops asking.
 | `vendor/` | wheels this box uses but does not build, mirrored with checksums |
 | `wheelhouse/` | **every dependency in the closure**, compiled on this box for this interpreter |
 | `requirements-<platform>-<jp>.lock` | produced by an actual offline install from `wheelhouse/` |
-| `apt/` | the CUDA / cuDNN / L4T `.deb` packages this box runs |
+| `apt-toolchain/` | Ubuntu's build toolchain `.deb`s — the part of the base that ages out first. A local backup for the box; **not in a release** |
+| `apt/` | the CUDA / cuDNN / L4T `.deb` packages this box runs — a local backup for the box, **never in a release** (NVIDIA's terms) |
 | `INSTALL.sh` | generated per folder — installs whatever is actually in it |
+| `NOTICES` | generated per folder — what each artifact was built from, and its license |
 | `SELFTEST-<platform>-<jp>.txt` | what was asserted on the real GPU, and the result |
 | `SYSTEM-PACKAGES-*.txt`, `SYSTEM-PIP-*.txt` | the box as it stood on build day |
 
@@ -118,10 +120,15 @@ bitsandbytes gates on compute capability ≥ 7.5. That's Volta, not a build flag
 
 ### Host Builds
 
+`build-host-prebuilts.sh`, for the x86_64 focal box (the NUC). Its release
+tag follows the same `YYYYMMDD_<platform>` rule as the Jetson folders, with
+`host-focal-x86_64` as the platform.
+
 | Artifact | Notes |
 |---|---|
-| `python3.10-<jp>-<platform>-aarch64.tar.gz` | Python 3.10 |
-| `sqlite3.45-<jp>-<platform>-aarch64.tar.gz` | SQLite for use for ChromaDB |
+| `python-3.10.14-focal-x86_64.tar.gz` | Python 3.10 from python.org source, `altinstall` layout, extracts to `/usr/local` |
+| `libsqlite3-3.45.1-focal-x86_64.tar.gz` | SQLite 3.45 (FTS5, JSON1) for ChromaDB; Python above is linked against it |
+| `PROVENANCE-host-focal-x86_64.txt`, `SHA256SUMS` | the same records the Jetson folders carry |
 
 ## Platform Detection and Tags
 
@@ -150,12 +157,67 @@ Xavier torch and a Spark torch are byte-different and identically named. Each
 folder also gets:
 
 - `PROVENANCE-<platform>-<jp>.txt` — the machine, the toolchain, and the exact
-  upstream commit behind every artifact
-- `SHA256SUMS` — verify offline with `sha256sum -c SHA256SUMS`
+  upstream commit behind every artifact. **One stanza per run, appended**; a
+  later run never rewrites what an earlier one recorded.
+- `SHA256SUMS` — every file in the folder, one line per path, merged across
+  runs. Verify offline with `sha256sum -c SHA256SUMS`.
 - `sources/` — with `--keep-sources`, the exact trees that were compiled, so the
   thing can be *rebuilt* and not merely re-downloaded
 - `INSTALL.sh` — generated from what is in the folder, so the folder can be
   consumed without this repo existing
+- `NOTICES` — generated the same way: what each artifact was built from and
+  under what license. The full table is `THIRD-PARTY-NOTICES.md`.
+
+### If your folder predates 2026-09-23
+
+Until then, every run truncated `PROVENANCE`, `SHA256SUMS` and `BUILD_INFO`
+before it started, so the records described whichever phases the *last*
+invocation ran. A one-minute `--cudadebs` pass on a finished archive left the
+torch wheel, the llama binary, the Python tarball and the whole `wheelhouse/`
+unlisted — and `sha256sum -c` passed on the debs that remained. The September
+2026 archives are in exactly that state.
+
+```bash
+bash build-jetson-prebuilts.sh --reindex --output-dir /mnt/nvme/prebuilt
+```
+
+rebuilds `SHA256SUMS` from what is on disk, appends an `artifact` line to the
+provenance for every file it never recorded, regenerates `INSTALL.sh` and
+`NOTICES`, and keeps the old list beside the new one. It builds nothing and
+deletes nothing. It cannot recover what the truncation destroyed — the source
+commits behind those binaries, that day's selftest verdict — and its stanza
+in the provenance says so. **Run it on the box you publish from.** A copy that
+went through a tool which re-encoded the `%3a` in the deb filenames is a
+different folder, and its checksums would describe files the Jetson does not
+have.
+
+`--verify-archive` now fails a folder that has *unlisted* files, not only one
+whose listed files mismatch. Verification by omission was the failure this
+repo exists to catch in other people's artifacts.
+
+### Pinned sources
+
+Python and SQLite are fetched from python.org and sqlite.org and **checked
+against `lib/sources.sha256` before anything compiles**; a mismatch refuses,
+an unlisted URL warns and writes the observed hash into the provenance so it
+can be pinned on purpose. llama.cpp and gasket-driver default to the refs in
+`lib/pins.sh`; `--llama-ref latest` / `--gasket-ref latest` chase HEAD, and the
+resolved SHA lands in the provenance either way. Bumping a baseline means
+adding its hash to the table first.
+
+## Release tags
+
+One platform folder per release, tagged **`YYYYMMDD_<platform>`** where the
+date is the build date and the platform is the folder name: `20260916_orin-jp6`,
+`20260916_xavier-jp5`, `20260916_spark-jp7`, `20260916_host-focal-x86_64`. The
+date is the *build*, not the upload, so two tags for the same folder are two
+different sets of bytes and never the same set re-uploaded. A release carries
+the artifacts this repo BUILDS, flat, one asset per file, plus the records
+(`SHA256SUMS`, provenance, selftest, `INSTALL.sh`, `NOTICES`). Neither `apt/`
+nor `apt-toolchain/` is uploaded: the cached debs are the box's own backup,
+not something to host. The driver prints the suggested tag at the
+end of every run; `--reindex` before you upload, `--verify-archive` on what
+you pulled back down.
 
 ## Usage
 
@@ -203,6 +265,8 @@ Useful options:
 - `--wheelhouse` / `--wheelhouse-reqs FILE` for the offline dependency closure
 - `--cuda-debs` to cache the CUDA/cuDNN/L4T debs (gigabytes)
 - `--selftest` to prove the artifacts on the real GPU before you publish them
+- `--reindex` to bring a folder's records up to date with its contents
+  without rebuilding anything (see above)
 
 `--all` means **all** — every phase the platform supports, including `--python`,
 `--sqlite`, `--bitsandbytes`, `--vllm`, `--cuda-debs`, `--wheelhouse`,
@@ -258,6 +322,16 @@ disposable — delete it to start the dependency graph over.
 This is also what makes the script work on Ubuntu 24.04 (the Spark), where the
 system interpreter is marked `EXTERNALLY-MANAGED` and every `pip install --user`
 is refused outright.
+
+## Licensing
+
+The scripts are GPL-3.0-or-later (`LICENSE`). The payloads are other people's
+work under their own terms — PyTorch (BSD-3), llama.cpp (MIT), bitsandbytes
+(MIT), vLLM (Apache-2.0), gasket-driver (GPL-2.0, it is a kernel module),
+CPython (PSF), SQLite (public domain), Ubuntu's toolchain packages (each their
+own). `THIRD-PARTY-NOTICES.md` has the table; every platform folder carries a
+generated `NOTICES` saying the same. `apt/` — NVIDIA's CUDA, cuDNN, TensorRT
+and L4T debs — is cached for the box that built it and is **never published**.
 
 ## Runtime Targets
 

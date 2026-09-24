@@ -29,8 +29,15 @@ build_python() {
         build-essential
 
     cd "$BUILD_DIR"
-    sudo rm -rf Python-${PYTHON_VERSION} Python-${PYTHON_VERSION}.tgz 2>/dev/null || true
-    wget -q --show-progress https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz
+    sudo rm -rf Python-${PYTHON_VERSION} 2>/dev/null || true
+    # Verified against lib/sources.sha256 - a tarball that is not the pinned
+    # bytes refuses here, not twenty hours later as a wheel that is subtly not
+    # the baseline. The hash lands in the provenance.
+    local py_sha
+    py_sha="$(fetch_verified "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz" \
+                             "$BUILD_DIR/Python-${PYTHON_VERSION}.tgz")"
+    printf 'source %-14s %s\n' "python" "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz" >> "$PROVENANCE"
+    printf '       %-14s sha256 %s\n' "" "$py_sha" >> "$PROVENANCE"
     tar xzf Python-${PYTHON_VERSION}.tgz
     cd Python-${PYTHON_VERSION}
 

@@ -9,11 +9,13 @@ Usage: $0 [BUILD FLAGS] [OPTIONS]
 
 Build flags (combine freely):
   --llama              Build llama-server binary (~10 min)
-  --pytorch            Build PyTorch wheel (~2-4 hours, RAM hungry)
-                       Version: 2.1.0 on jp5/Xavier, 2.3.1 on jp6/Orin
-                       (CUDA 12.6 broke 2.1.0's Thrust calls)
-  --torchvision        Build torchvision wheel (~30 min, needs torch installed)
-                       Version: 0.16.0 on jp5/Xavier, 0.18.1 on jp6/Orin
+  --pytorch            Build PyTorch wheel (hours; ~20 on an 8GB Nano at two
+                       jobs, ~12 on a Xavier, ~1 on the Spark). The version is
+                       the platform's held baseline in lib/platform.sh:
+                       2.1.0 on jp5/Xavier (the last that builds on CUDA 12.2),
+                       2.11.0 on jp6/Orin and jp7/Spark.
+  --torchvision        Build torchvision wheel (~30 min, needs the torch above)
+                       0.16.0 on jp5/Xavier, 0.26.0 on jp6 and jp7.
   --coral              Build Coral TPU kernel modules (gasket + apex, ~5 min)
   --python             Build the baseline Python from python.org source
                        (~30 min). EVERY platform, not just Xavier: "the distro
@@ -59,13 +61,23 @@ Build flags (combine freely):
                        skip with a stated reason.
 
 Verification (builds nothing):
-  --verify-archive     The restore rehearsal. Checks SHA256SUMS, installs the
+  --verify-archive     The restore rehearsal. Checks that every file in the
+                       folder is in SHA256SUMS and matches it, installs the
                        folder into a throwaway venv with --no-index, and runs
                        the same GPU assertions --selftest does. Use it on a
                        folder you pulled off a release tag, on the box you
                        would actually be restoring. An archive is only as good
                        as its last restore. Combine with --output-dir to point
                        at an archive somewhere other than the default.
+  --reindex            Rebuild SHA256SUMS from what is actually in the folder,
+                       append an artifact line to the provenance for anything
+                       it never recorded, and regenerate INSTALL.sh and
+                       NOTICES. Builds nothing, deletes nothing. Run it on a
+                       folder whose records were written by a version of this
+                       script that truncated them per run (before 2026-09-23),
+                       or after moving files in by hand. Run it ON THE BOX
+                       YOU PUBLISH FROM: a copy that went through a tool which
+                       re-encoded the deb filenames is not the folder.
 
 Options:
   --build-dir DIR      Where source trees get cloned (~30GB for pytorch).
@@ -133,8 +145,9 @@ Options:
                        REPO: if an upstream is renamed, rewritten or deleted,
                        a binary alone is a dead end - this is what lets someone
                        rebuild instead of only re-download. Not small.
-  --llama-ref REF      Pin llama.cpp to a tag/branch/commit. Unpinned it takes
-                       master HEAD; either way the resolved SHA is recorded.
+  --llama-ref REF      Build llama.cpp at REF (tag, branch or commit) instead
+                       of the pinned default in lib/pins.sh. `latest` follows
+                       master HEAD. The resolved SHA is recorded either way.
   --gasket-ref REF     Same, for google/gasket-driver.
   --cuda-host-compiler PATH
                        Which g++ nvcc hands the C++ to. The distro default is
@@ -194,7 +207,8 @@ Artifacts land in <output-dir>/<platform>-<jp>/ alongside three records:
   SHA256SUMS                       verify offline with: sha256sum -c SHA256SUMS
   sources/                         (--keep-sources) the trees that were compiled
 
-Upload one platform folder per release tag. A file that gets separated from its
+Upload one platform folder per release tag, named YYYYMMDD_<platform> after the
+build date (20260916_orin-jp6). A file that gets separated from its
 folder can still be identified by its sha256 in any of the manifests.
 
 NOTE ON MIXED OUTPUT DIRS: wheel filenames carry the Python tag but not the GPU

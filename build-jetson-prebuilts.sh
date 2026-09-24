@@ -93,6 +93,7 @@ BUILD_WHEELHOUSE=false
 BUILD_SELFTEST=false
 BUILD_CUDADEBS=false
 DO_VERIFY=false
+DO_REINDEX=false
 # The default closure is deliberately small - see the note in build_wheelhouse.
 WHEELHOUSE_PKGS="pip setuptools wheel numpy"
 WHEELHOUSE_REQS=""
@@ -144,6 +145,7 @@ while [[ $# -gt 0 ]]; do
         --cuda-debs-match) CUDA_DEB_MATCH="$2"; shift 2 ;;
         --selftest)     BUILD_SELFTEST=true; shift ;;
         --verify-archive) DO_VERIFY=true; shift ;;
+        --reindex)      DO_REINDEX=true; shift ;;
         --vendor-pkgs)  VENDOR_PKGS="$2"; shift 2 ;;
         --vendor-wheel) VENDOR_WHEELS="$VENDOR_WHEELS $2"; shift 2 ;;
         --vendor-index) VENDOR_INDEX="$2"; shift 2 ;;
@@ -198,8 +200,8 @@ for _v in $(compgen -A variable BUILD_ 2>/dev/null); do
     build_available="${build_available:+$build_available }--${_f}"
     [ "${!_v}" = "true" ] && build_requested=true
 done
-if ! $build_requested && ! $DO_VERIFY; then
-    fail "No build flag given. Pass --all, --verify-archive, or any of: ${build_available}. Try -h."
+if ! $build_requested && ! $DO_VERIFY && ! $DO_REINDEX; then
+    fail "No build flag given. Pass --all, --verify-archive, --reindex, or any of: ${build_available}. Try -h."
 fi
 # --verify-archive READS an archive; it must not also build one. Silently
 # ignoring the combination would be worse than refusing it: you would wait
@@ -207,6 +209,12 @@ fi
 if $DO_VERIFY && $build_requested; then
     fail "--verify-archive builds nothing - run it on its own, after the build."
 fi
+if $DO_REINDEX && { $build_requested || $DO_VERIFY; }; then
+    fail "--reindex rewrites the records of an existing folder - run it on its own."
+fi
+# Everything below that says "not when verifying" means "not when reindexing"
+# too: both read a folder somebody else built.
+$DO_REINDEX && DO_VERIFY=true
 
 # Validate --max-jobs if provided
 if [ -n "$USER_MAX_JOBS" ]; then
@@ -404,6 +412,13 @@ STATE_FILE="$PREBUILT_DIR/.build.state.json"
 ensure_jq
 
 
+# ── the two git sources, pinned unless you say otherwise ──
+# See lib/pins.sh for the values and the story. `--llama-ref latest` /
+# `--gasket-ref latest` follows upstream HEAD; the resolved SHA is recorded
+# in the provenance either way.
+LLAMA_REF="$(resolve_ref "$USER_LLAMA_REF" "$LLAMA_REF_DEFAULT")"
+GASKET_REF="$(resolve_ref "$USER_GASKET_REF" "$GASKET_REF_DEFAULT")"
+
 # ─────────────────────────────────────────────────────────────
 # Banner + prereqs
 # ─────────────────────────────────────────────────────────────
@@ -523,13 +538,28 @@ fi
 # environment it died in. Toolchain versions are captured from the machine, not
 # assumed: four years from now "gcc 9.4.0 on Ubuntu 20.04" is the difference
 # between reproducing this and guessing at it.
-# NOT WHEN VERIFYING. This block truncates PROVENANCE and SHA256SUMS - which
-# on a --verify-archive run would destroy the very checksums being checked
-# before a single one was read.
+# NOT WHEN VERIFYING. And NEVER TRUNCATING, any more: this block used to open
+# PROVENANCE with `>` and SHA256SUMS with `: >` on every run, so a one-minute
+# `--cudadebs` pass on a finished archive threw away the record of the twenty
+# hours before it - the torch and llama source commits, every artifact line,
+# the selftest verdict - and left SHA256SUMS listing the debs and nothing else.
+# The archive looked complete and verified, and was neither. Each run now
+# APPENDS its own stanza, headed by when it ran and what it was asked to do;
+# the first run on a fresh folder writes the file header. SHA256SUMS is merged
+# per path by sums_put. Nothing a previous run recorded is ever thrown away by
+# a later one.
 if ! $DO_VERIFY; then
+if [ ! -s "$PROVENANCE" ]; then
 {
     echo "# SerenSystemPrebuilts provenance"
     echo "# Everything below was read from the machine that did the build."
+    echo "# One stanza per run, oldest first. Nothing here is ever rewritten by a"
+    echo "# later run; --reindex appends, it does not replace."
+} > "$PROVENANCE"
+fi
+{
+    echo ""
+    echo "# ══ run $(date -Iseconds) ══  $(basename "$0") ${SEREN_ORIGINAL_ARGS[*]}"
     echo "built            $(date -Iseconds)"
     echo "host             $(uname -n)"
     echo "platform         ${PLATFORM_TAG}"
@@ -555,11 +585,11 @@ if ! $DO_VERIFY; then
     echo "baseline numpy         build ${NUMPY_BUILD_VERSION} / runtime ${NUMPY_RUNTIME_VERSION}"
     echo "baseline vllm          ${VLLM_VERSION:-<unsupported on this GPU>}"
     echo "baseline vllm-torch    ${VLLM_TORCH_VERSION} (vLLM's own venv, not the one above)"
-    echo "baseline llama.cpp     ${USER_LLAMA_REF:-<unpinned: master HEAD, sha recorded below>}"
-    echo "baseline gasket        ${USER_GASKET_REF:-<unpinned: default HEAD, sha recorded below>}"
+    echo "baseline llama.cpp     $(describe_ref "$LLAMA_REF")"
+    echo "baseline gasket        $(describe_ref "$GASKET_REF")"
     echo ""
-} > "$PROVENANCE"
-: > "$PLATFORM_DIR/SHA256SUMS"
+} >> "$PROVENANCE"
+touch "$PLATFORM_DIR/SHA256SUMS"
 fi
 
 # Common build deps (only install what's needed)
@@ -672,13 +702,18 @@ fi
 
 START_TIME=$(date +%s)
 BUILD_INFO="$PREBUILT_DIR/BUILD_INFO_${PLATFORM_TAG}_${JP_FAMILY}.txt"
+# Appended, one block per run, for the same reason the provenance is: the
+# shipped BUILD_INFO files read "Total build time: 1 minutes" because the
+# --cudadebs pass overwrote the twenty-hour record.
 if ! $DO_VERIFY; then
 {
+    [ -s "$BUILD_INFO" ] && echo ""
+    echo "== run: $(basename "$0") ${SEREN_ORIGINAL_ARGS[*]}"
     echo "Build started: $(date)"
     echo "Platform: $PLATFORM_TAG ($JP_FAMILY)"
     echo "Kernel: $KERNEL_VER"
     echo "Host: $(hostname)"
-} > "$BUILD_INFO"
+} >> "$BUILD_INFO"
 fi
 
 
@@ -806,6 +841,9 @@ $DO_VERIFY || record_system_snapshot
 # ── verify instead of building, if that is what was asked ──
 # Here rather than at parse time because it needs every function above, and the
 # platform/output-dir resolution that decides WHICH folder to look at.
+if $DO_REINDEX; then
+    if reindex_archive; then exit 0; else exit 1; fi
+fi
 if $DO_VERIFY; then
     if verify_archive; then exit 0; else exit 1; fi
 fi
@@ -917,6 +955,9 @@ done
 
 # ── the folder explains itself from here on ──
 write_install_script
+write_notices
+# Nothing writes to the provenance after this line; its checksum goes in last.
+seal_provenance
 
 # ═════════════════════════════════════════════════════════════
 # Summary
@@ -968,6 +1009,7 @@ echo ""
 echo -e "${GREEN}Archive records:${NC}"
 echo "  provenance : $PROVENANCE"
 echo "  checksums  : $PLATFORM_DIR/SHA256SUMS   (sha256sum -c SHA256SUMS)"
+echo "  notices    : $PLATFORM_DIR/NOTICES   (what these were built from, and its terms)"
 if $KEEP_SOURCES && [ -d "$SOURCES_DIR" ]; then
   echo "  sources    : $SOURCES_DIR ($(du -sh "$SOURCES_DIR" 2>/dev/null | cut -f1))"
 else
@@ -975,7 +1017,8 @@ else
   echo -e "               that were actually compiled. Without them these binaries"
   echo -e "               cannot be rebuilt if an upstream goes away.${NC}"
 fi
-echo "  upload the whole ${PLATFORM_TAG}-${JP_FAMILY}/ folder to one release tag"
+echo "  upload the built artifacts + records (never apt/ or apt-toolchain/) to one release tag:"
+echo "    $(date +%Y%m%d)_${PLATFORM_TAG}-${JP_FAMILY}      (YYYYMMDD_<platform>, the BUILD date)"
 echo ""
 cat "$BUILD_INFO"
 echo ""

@@ -78,7 +78,27 @@ record_artifact() {
     # checksum file, because it looks like diligence.
     local rel="${f#"$PLATFORM_DIR"/}"
     printf 'artifact %-52s %s  %s\n' "$rel" "$(stat -c%s "$f")" "$sum" >> "$PROVENANCE"
-    printf '%s  %s\n' "$sum" "$rel" >> "$PLATFORM_DIR/SHA256SUMS"
+    sums_put "$PLATFORM_DIR/SHA256SUMS" "$sum" "$rel"
+}
+
+# sums_put SUMSFILE SHA PATH - one line per path, the newest wins.
+#
+# SHA256SUMS used to be `: >` truncated at the top of every run and appended to
+# by every phase, so it described whichever phases the LAST invocation happened
+# to run: a --cudadebs run on a finished archive left the torch wheel, the
+# llama binary, the python tarball and every wheelhouse wheel unlisted, and
+# `sha256sum -c` passed on the remainder. Now the file survives across runs and
+# a rebuilt artifact REPLACES its own line rather than sitting beside the stale
+# one - two lines for one path would make -c fail on the old one forever.
+sums_put() {
+    local sums="$1" sum="$2" rel="$3" tmp
+    if [ -f "$sums" ] && grep -qF -- "  $rel" "$sums"; then
+        tmp="$(mktemp)"
+        # Match on the exact path after the two-space separator.
+        awk -v p="$rel" 'index($0, "  " p) != length($0) - length(p) - 1 { print }' "$sums" > "$tmp"
+        mv "$tmp" "$sums"
+    fi
+    printf '%s  %s\n' "$sum" "$rel" >> "$sums"
 }
 
 # ═════════════════════════════════════════════════════════════

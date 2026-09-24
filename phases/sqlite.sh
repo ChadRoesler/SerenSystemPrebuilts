@@ -15,8 +15,13 @@ build_sqlite() {
     log "Building SQLite ${SQLITE_VERSION} for ${JP_FAMILY}/${PLATFORM_TAG}..."
 
     cd "$BUILD_DIR"
-    sudo rm -rf sqlite-autoconf-${SQLITE_URL_VERSION} sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz 2>/dev/null || true
-    wget -q --show-progress https://www.sqlite.org/${SQLITE_YEAR}/sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz
+    sudo rm -rf sqlite-autoconf-${SQLITE_URL_VERSION} 2>/dev/null || true
+    # Verified against lib/sources.sha256; see phases/python.sh for why.
+    local sq_sha
+    sq_sha="$(fetch_verified "https://www.sqlite.org/${SQLITE_YEAR}/sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz" \
+                             "$BUILD_DIR/sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz")"
+    printf 'source %-14s %s\n' "sqlite" "https://www.sqlite.org/${SQLITE_YEAR}/sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz" >> "$PROVENANCE"
+    printf '       %-14s sha256 %s\n' "" "$sq_sha" >> "$PROVENANCE"
     tar xzf sqlite-autoconf-${SQLITE_URL_VERSION}.tar.gz
     cd sqlite-autoconf-${SQLITE_URL_VERSION}
     ./configure --prefix=/usr/local
