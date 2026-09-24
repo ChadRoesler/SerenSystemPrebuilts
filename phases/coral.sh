@@ -174,14 +174,13 @@ build_coral() {
 
     cd "$BUILD_DIR"
     rm -rf gasket-driver
-    if [ -n "$USER_GASKET_REF" ]; then
-        git clone https://github.com/google/gasket-driver.git
-        git -C gasket-driver checkout --quiet "$USER_GASKET_REF" \
-            || fail "gasket-driver: no such ref '$USER_GASKET_REF'"
-        log "gasket-driver pinned to $USER_GASKET_REF"
+    git clone https://github.com/google/gasket-driver.git
+    if [ -n "$GASKET_REF" ]; then
+        git -C gasket-driver checkout --quiet "$GASKET_REF" \
+            || fail "gasket-driver: no such ref '$GASKET_REF'"
+        log "gasket-driver pinned to $GASKET_REF"
     else
-        git clone https://github.com/google/gasket-driver.git
-        warn "gasket-driver is UNPINNED (default branch HEAD) - commit recorded below"
+        warn "gasket-driver is UNPINNED (--gasket-ref latest) - commit recorded below"
     fi
     record_source gasket-driver "$PWD/gasket-driver"
     cd gasket-driver/src

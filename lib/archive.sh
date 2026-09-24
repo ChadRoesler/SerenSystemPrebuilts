@@ -25,20 +25,8 @@ verify_archive() {
 
     local rc=0
 
-    # ── 1. is it still the bytes we wrote ──
-    if [ -f "$PLATFORM_DIR/SHA256SUMS" ]; then
-        log "── checksums ──"
-        if ( cd "$PLATFORM_DIR" && sha256sum -c --quiet SHA256SUMS ); then
-            log "  PASS  every file matches SHA256SUMS"
-        else
-            warn "  FAIL  checksum mismatch or missing file (above)"
-            rc=1
-        fi
-    else
-        warn "  no SHA256SUMS in this folder - it was not produced by this script,"
-        warn "  or it was produced before checksums were written."
-        rc=1
-    fi
+    # ── 1. is it still the bytes we wrote - ALL of them ──
+    verify_checksums "$PLATFORM_DIR" || rc=1
 
     # ── 2. does it still install, with the index switched off ──
     rm -rf "$VENV_ROOT/verify"
@@ -75,6 +63,220 @@ verify_archive() {
     fi
     echo ""
     return $rc
+}
+
+
+# ═════════════════════════════════════════════════════════════
+# verify_checksums - two questions, and the second one was never asked
+# ═════════════════════════════════════════════════════════════
+#
+# `sha256sum -c` answers "does every LISTED file still match". It cannot answer
+# "is every file in this folder listed", and for a long time the answer was no:
+# the shipped archives passed -c on 378 debs while the torch wheel, the llama
+# binary, the python tarball and every wheelhouse wheel sat beside them
+# unlisted. Verification by omission is the failure this repo exists to catch
+# in other people's artifacts. So: both questions, and either one fails it.
+#
+# Pure: no venv, no GPU, no network. Runs anywhere sha256sum does.
+verify_checksums() {
+    local dir="$1" rc=0
+    if [ ! -f "$dir/SHA256SUMS" ]; then
+        warn "  no SHA256SUMS in this folder - it was not produced by this script,"
+        warn "  or it was produced before checksums were written. --reindex writes one."
+        return 1
+    fi
+    log "── checksums ──"
+    if ( cd "$dir" && sha256sum -c --quiet SHA256SUMS ); then
+        log "  PASS  every listed file matches SHA256SUMS"
+    else
+        warn "  FAIL  checksum mismatch or missing file (above)"
+        rc=1
+    fi
+    local unlisted
+    unlisted="$(archive_unlisted_files "$dir")"
+    if [ -n "$unlisted" ]; then
+        warn "  FAIL  $(echo "$unlisted" | wc -l) file(s) in the folder are NOT in SHA256SUMS:"
+        echo "$unlisted" | head -20 | sed 's/^/          /' >&2
+        [ "$(echo "$unlisted" | wc -l)" -gt 20 ] && warn "          ... and more"
+        warn "        A file that is not listed cannot be verified. --reindex lists them."
+        rc=1
+    else
+        log "  PASS  every file in the folder is listed"
+    fi
+    return $rc
+}
+
+# archive_files DIR - every file that belongs in SHA256SUMS, relative, sorted.
+# SHA256SUMS itself (and the copies --reindex keeps of it) cannot list itself;
+# everything else must be there, the provenance included - see seal_provenance.
+archive_files() {
+    local dir="$1"
+    ( cd "$dir" && find . -type f ! -name 'SHA256SUMS' ! -name 'SHA256SUMS.before-reindex-*' \
+        ! -name '.build.state.json' | sed 's|^\./||' | LC_ALL=C sort )
+}
+
+# seal_provenance - the provenance's own line in SHA256SUMS, written LAST.
+#
+# Every record_artifact appends to the provenance, so a sum taken mid-run is
+# stale by the next phase. The run seals it once nothing else will write: after
+# INSTALL.sh and NOTICES. A phase added later that writes to the provenance
+# after this point makes --verify-archive fail on the provenance line - which
+# is the loud version of "the record and the folder disagree", and the right one.
+seal_provenance() {
+    [ -f "$PROVENANCE" ] || return 0
+    sums_put "$PLATFORM_DIR/SHA256SUMS" "$(sha256sum "$PROVENANCE" | awk '{print $1}')" \
+             "${PROVENANCE#"$PLATFORM_DIR"/}"
+}
+
+# archive_unlisted_files DIR - files present on disk but absent from SHA256SUMS.
+archive_unlisted_files() {
+    local dir="$1"
+    LC_ALL=C comm -23 \
+        <(archive_files "$dir") \
+        <(awk 'NF >= 2 { sub(/^[^ ]+  /, ""); print }' "$dir/SHA256SUMS" | LC_ALL=C sort -u)
+}
+
+# ═════════════════════════════════════════════════════════════
+# --reindex - the records catch up with the folder, without a rebuild
+# ═════════════════════════════════════════════════════════════
+#
+# For a folder whose SHA256SUMS was truncated by a later run, or that had files
+# moved into it by hand. Builds nothing, deletes nothing. It:
+#   1. hashes every file on disk and writes a complete SHA256SUMS (the old one
+#      is kept as SHA256SUMS.before-reindex-<ts> until you delete it)
+#   2. appends an `artifact` line to the provenance for every file the
+#      provenance never mentioned - so the record now covers the folder, and
+#      says in the stanza header that this is a reindex, not a build
+#   3. regenerates INSTALL.sh and NOTICES from what is in the folder
+# What it cannot do is recover what the truncation destroyed: the source commit
+# a binary was built from, the selftest verdict of that day. Those lines are
+# gone; the reindex stanza says so rather than pretending.
+reindex_archive() {
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Archive reindex (nothing is built)${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════${NC}"
+    log "folder:   $PLATFORM_DIR"
+    [ -d "$PLATFORM_DIR" ] || fail "no such folder: $PLATFORM_DIR
+  Point --output-dir at the parent of <platform>-<jp>/, or pass --platform."
+
+    local sums="$PLATFORM_DIR/SHA256SUMS" ts
+    ts="$(date +%Y%m%dT%H%M%S)"
+    local before=0 unlisted_n=0 stale_n=0
+    if [ -f "$sums" ]; then
+        before="$(grep -c . "$sums" || true)"
+        unlisted_n="$(archive_unlisted_files "$PLATFORM_DIR" | grep -c . || true)"
+        stale_n="$(LC_ALL=C comm -13 <(archive_files "$PLATFORM_DIR") \
+                   <(awk 'NF >= 2 { sub(/^[^ ]+  /, ""); print }' "$sums" | LC_ALL=C sort -u) | grep -c . || true)"
+        cp "$sums" "$sums.before-reindex-$ts"
+        log "kept the old list as $(basename "$sums").before-reindex-$ts"
+    fi
+
+    # Which paths the provenance already accounts for, so only the gaps get a
+    # new line. Matching on the path column of `artifact` lines.
+    local known
+    known="$( [ -f "$PROVENANCE" ] && awk '$1 == "artifact" { print $2 }' "$PROVENANCE" | LC_ALL=C sort -u || true )"
+
+    if [ ! -s "$PROVENANCE" ]; then
+        {
+            echo "# SerenSystemPrebuilts provenance"
+            echo "# This folder had no provenance when it was reindexed; what produced"
+            echo "# these files is not recorded here. The lines below are what is on disk."
+        } > "$PROVENANCE"
+    fi
+    {
+        echo ""
+        echo "# ══ reindex $(date -Iseconds) ══  $(basename "$0") ${SEREN_ORIGINAL_ARGS[*]}"
+        echo "reindex          on $(uname -n); nothing was built. SHA256SUMS rebuilt from disk"
+        echo "                 (was $before lines: $unlisted_n file(s) unlisted, $stale_n listed-but-absent)."
+        echo "                 Artifact lines below are files the provenance had never recorded;"
+        echo "                 the build that made them, and its source commits, are not recoverable"
+        echo "                 from here if an earlier run truncated them."
+    } >> "$PROVENANCE"
+
+    : > "$sums"
+    local rel f n=0 added=0
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        f="$PLATFORM_DIR/$rel"
+        # The provenance and the previous sums copies are records, not
+        # artifacts: listed in SHA256SUMS so the folder is whole, never given
+        # an `artifact` line of their own.
+        case "$rel" in
+            PROVENANCE-*.txt) continue ;;          # sealed last, see seal_provenance
+            NOTICES|INSTALL.sh) continue ;;        # regenerated and recorded below
+        esac
+        if echo "$known" | grep -qxF -- "$rel"; then
+            sums_put "$sums" "$(sha256sum "$f" | awk '{print $1}')" "$rel"
+        else
+            record_artifact "$f"     # writes the provenance line AND the sum
+            added=$((added + 1))
+        fi
+        n=$((n + 1))
+    done < <(archive_files "$PLATFORM_DIR")
+
+    # INSTALL.sh and NOTICES are generated from the folder, so regenerate and
+    # then list them (record_artifact inside those writers adds their lines).
+    write_install_script
+    write_notices
+    seal_provenance
+
+    log "SHA256SUMS: $n file(s) listed ($added newly recorded in the provenance)"
+    echo ""
+    if verify_checksums "$PLATFORM_DIR"; then
+        echo -e "${GREEN}REINDEXED - every file in $PLATFORM_DIR is listed and matches.${NC}"
+        echo -e "${GREEN}Publish from THIS folder; a copy that renamed anything is a different folder.${NC}"
+        echo ""
+        return 0
+    fi
+    echo -e "${RED}REINDEX LEFT A MISMATCH - see above. That should be impossible; look before publishing.${NC}"
+    echo ""
+    return 1
+}
+
+# ═════════════════════════════════════════════════════════════
+# NOTICES - the terms travel with the folder
+# ═════════════════════════════════════════════════════════════
+#
+# Every artifact here is built from somebody else's work under their license,
+# and a folder pulled off a release tag has to say so without this repo being
+# reachable. Generated from what is actually in the folder, like INSTALL.sh;
+# the table is THIRD-PARTY-NOTICES.md in the repo, kept in one place.
+write_notices() {
+    local f="$PLATFORM_DIR/NOTICES"
+    {
+        echo "SerenSystemPrebuilts - ${PLATFORM_TAG}/${JP_FAMILY} - NOTICES"
+        echo "Generated $(date -Iseconds). The build scripts are GPL-3.0-or-later;"
+        echo "everything in this folder is built from the projects below, under their terms."
+        echo ""
+        ls "$PLATFORM_DIR"/torch-*.whl >/dev/null 2>&1 && \
+            echo "torch-*.whl, torchvision-*.whl   PyTorch / torchvision      BSD-3-Clause   github.com/pytorch"
+        ls "$PLATFORM_DIR"/llama-server-* >/dev/null 2>&1 && \
+            echo "llama-server-*                   llama.cpp + ggml           MIT            github.com/ggml-org/llama.cpp"
+        ls "$PLATFORM_DIR"/bitsandbytes-*.whl >/dev/null 2>&1 && \
+            echo "bitsandbytes-*.whl               bitsandbytes               MIT            github.com/bitsandbytes-foundation/bitsandbytes"
+        ls "$PLATFORM_DIR"/vllm/*.whl >/dev/null 2>&1 && \
+            echo "vllm/*.whl                       vLLM                       Apache-2.0     github.com/vllm-project/vllm"
+        ls "$PLATFORM_DIR"/gasket-*.ko >/dev/null 2>&1 && \
+            echo "gasket-*.ko, apex-*.ko           gasket-driver (kernel)     GPL-2.0        github.com/google/gasket-driver"
+        ls "$PLATFORM_DIR"/python*.tar.gz >/dev/null 2>&1 && \
+            echo "python*.tar.gz                   CPython                    PSF-2.0        python.org"
+        ls "$PLATFORM_DIR"/sqlite*.tar.gz >/dev/null 2>&1 && \
+            echo "sqlite*.tar.gz                   SQLite                     public domain  sqlite.org"
+        { ls "$PLATFORM_DIR"/wheelhouse/*.whl >/dev/null 2>&1 || ls "$PLATFORM_DIR"/vendor/*.whl >/dev/null 2>&1; } && \
+            echo "wheelhouse/, vendor/             each wheel's own METADATA carries its license"
+        [ -d "$PLATFORM_DIR/apt-toolchain" ] && \
+            echo "apt-toolchain/*.deb              Ubuntu packages (local backup, not released); usr/share/doc/<pkg>/copyright inside each"
+        if [ -d "$PLATFORM_DIR/apt" ]; then
+            echo "apt/*.deb                        NVIDIA CUDA/cuDNN/L4T - NVIDIA's terms. NOT REDISTRIBUTABLE:"
+            echo "                                 cached for the box that built this; never in a release."
+        fi
+        echo ""
+        echo "Nothing here relicenses anything. Full table: THIRD-PARTY-NOTICES.md in the"
+        echo "SerenSystemPrebuilts repository."
+    } > "$f"
+    record_artifact "$f"
+    log "wrote NOTICES - the folder carries its licenses without the repo"
 }
 
 # ═════════════════════════════════════════════════════════════
@@ -210,9 +412,9 @@ write_install_script() {
         fi
         if [ -d "$PLATFORM_DIR/apt" ] || [ -d "$PLATFORM_DIR/apt-toolchain" ]; then
             echo 'if $DO_APT; then'
-            echo '  # Two directories, and a release only ever carries the second one:'
-            echo '  # apt/ is NVIDIA CUDA/cuDNN/L4T (not redistributable, local only),'
-            echo '  # apt-toolchain/ is Ubuntu build packages (redistributable).'
+            echo '  # Two directories, and a release carries NEITHER - both are this box'"'"'s'
+            echo '  # own backup: apt/ is NVIDIA CUDA/cuDNN/L4T (not redistributable),'
+            echo '  # apt-toolchain/ the Ubuntu toolchain these artifacts were built with.'
             echo '  # Whichever is present gets installed; neither is required.'
             echo '  if ls apt/*.deb >/dev/null 2>&1; then'
             echo '    sudo dpkg -i apt/*.deb || sudo apt-get -f install'

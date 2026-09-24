@@ -1,0 +1,26 @@
+# ── Upstream source tarballs this repo compiles, pinned by content ──────────
+#
+# One line per file:   <sha256>  <url>
+#
+# fetch_verified (lib/fetch.sh) looks the URL up here after downloading. A hit
+# is checked and a mismatch REFUSES - a tarball that is not the bytes we built
+# from is not a rebuild, whatever its name says. A URL that is not listed is
+# still fetched, but the run says so and writes the hash it saw into the
+# provenance, so the next person can pin it deliberately.
+#
+# Every hash here was computed from a fresh download on 2026-09-23 and, where
+# the publisher lists an independent digest, cross-checked against it:
+#   Python-3.10.14.tgz   md5 f67d78c8323a18fe6b945914c51a7aa6 matches python.org
+#   Python-3.12.8.tgz    md5 304473cf367fa65e450edf4b06b55fcc matches python.org
+#   sqlite-autoconf-3450100.tar.gz   sha3-256 a54395aa2cf76b5b973fa420715b6108
+#                        afedc4d8c0209c763fd2c1b517f8ad9f, from the download
+#                        itself; sqlite.org only lists digests for the current
+#                        release, so this one has a single witness.
+#
+# Bumping a baseline (PYTHON_VERSION / SQLITE_VERSION in lib/platform.sh, or
+# the host script) means adding its line here FIRST. The script will not stop
+# you forgetting - it will warn - but the warning is in the run log, and the
+# run is twenty hours.
+cefea32d3be89c02436711c95a45c7f8e880105514b78680c14fe76f5709a0f6  https://www.python.org/ftp/python/3.10.14/Python-3.10.14.tgz
+5978435c479a376648cb02854df3b892ace9ed7d32b1fead652712bee9d03a45  https://www.python.org/ftp/python/3.12.8/Python-3.12.8.tgz
+cd9c27841b7a5932c9897651e20b86c701dd740556989b01ca596fcfa3d49a0a  https://www.sqlite.org/2024/sqlite-autoconf-3450100.tar.gz

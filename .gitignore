@@ -1,0 +1,13 @@
+# The platform folders are release payloads (4-7 GB each), published as
+# GitHub release assets one folder per tag, never committed. The scripts,
+# the pins, the notices and this file are the repo.
+*-jp[0-9]/
+host-prebuilts-out/
+host-prebuilts-build/
+# Per-run build logs from the box that built; the archive keeps its own
+# PROVENANCE inside the platform folder.
+BUILD_INFO_*.txt
+.build.state.json
+# The host (NUC) build output, pulled here under whatever name it was given.
+focal/
+host-*/

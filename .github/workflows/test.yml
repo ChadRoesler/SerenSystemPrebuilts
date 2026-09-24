@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Nothing here builds anything - a build is twenty hours on a Nano. This
+# proves the parts that CAN be proved on a runner: every script parses, no
+# shell file carries CRLF (a parse error on the boxes), and the archive
+# records behave - one line per path, verification that fails on an unlisted
+# file, --reindex, and the pinned upstream fetch.
+jobs:
+  scripts:
+    name: Scripts parse and the records behave
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No CRLF in shell scripts
+        run: |
+          bad=$(find . -name '*.sh' -not -path './.git/*' -exec file {} \; | grep CRLF || true)
+          if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+          echo "all .sh are LF"
+
+      - name: bash -n every script
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "SYNTAX: $f"; fail=1; }
+          done < <(find . -name '*.sh' -not -path './.git/*')
+          exit $fail
+
+      - name: Archive records (sums, verify, reindex, pinned fetch)
+        run: bash tests/test-archive-records.sh
+
+      - name: The source table pins every baseline the platforms name
+        run: |
+          # lib/platform.sh names the Python and SQLite versions; every one of
+          # them must have a line in lib/sources.sha256 or the first fetch on a
+          # box is an unverified one with a twenty-hour build behind it.
+          fail=0
+          for v in $(grep -oE 'PYTHON_VERSION="[0-9.]+"' lib/platform.sh | grep -oE '[0-9.]+' | sort -u); do
+            grep -q "Python-$v.tgz" lib/sources.sha256 || { echo "no pin for Python $v"; fail=1; }
+          done
+          sq=$(grep -oE 'SQLITE_URL_VERSION="[0-9]+"' lib/platform.sh | grep -oE '[0-9]+' | head -1)
+          grep -q "sqlite-autoconf-$sq.tar.gz" lib/sources.sha256 || { echo "no pin for sqlite $sq"; fail=1; }
+          exit $fail

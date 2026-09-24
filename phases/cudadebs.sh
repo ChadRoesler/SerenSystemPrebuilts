@@ -171,7 +171,7 @@ build_cudadebs() {
     tsize=$(du -sh "$T" 2>/dev/null | cut -f1)
     log "  cached $got new .debs, $have already here, $missed unavailable"
     log "    apt/           $size  (NVIDIA CUDA/cuDNN/L4T - DO NOT REPUBLISH)"
-    log "    apt-toolchain/ $tsize  (Ubuntu build toolchain - redistributable)"
+    log "    apt-toolchain/ $tsize  (Ubuntu build toolchain - a local backup, not released)"
     if [ "$missed" -gt 0 ]; then
         warn "  $missed packages could not be downloaded - listed in $(basename "$D")/UNAVAILABLE.txt"
         warn "  If those are CUDA runtime libraries, this archive cannot fully"
@@ -185,7 +185,7 @@ build_cudadebs() {
         echo "# These are NVIDIA's redistributables and their licence terms are NOT"
         echo "# permissive about mirroring - cuDNN's are stricter than CUDA's. Keep"
         echo "# this folder local. It is excluded from GitHub releases deliberately;"
-        echo "# the sibling apt-toolchain/ directory is the publishable one."
+        echo "# the sibling apt-toolchain/ directory is this box's backup too, not released."
         echo "#"
         echo "# It is still worth keeping: this is the ONLY part of the archive that"
         echo "# nobody outside NVIDIA can rebuild from source, and JetPack 5's repo"
@@ -225,7 +225,7 @@ build_cudadebs() {
     } > "$T/README.txt"
 
     echo "apt_cache        $got debs, apt/ $size + apt-toolchain/ $tsize ($missed unavailable)" >> "$PROVENANCE"
-    echo "apt_publishable  apt-toolchain/ only - apt/ holds NVIDIA redistributables" >> "$PROVENANCE"
+    echo "apt_published    neither - apt/ is NVIDIA's, apt-toolchain/ is this box's own backup" >> "$PROVENANCE"
     echo "cuda debs: $got cached (apt/ $size, apt-toolchain/ $tsize)" >> "$BUILD_INFO"
     record_artifact "$list"
     record_artifact "$D/README.txt"
