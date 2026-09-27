@@ -327,7 +327,7 @@ is refused outright.
 
 ## Licensing
 
-The scripts are GPL-3.0-or-later (`LICENSE`). The payloads are other people's
+The scripts are AGPL-3.0-or-later (`LICENSE`). The payloads are other people's
 work under their own terms — PyTorch (BSD-3), llama.cpp (MIT), bitsandbytes
 (MIT), vLLM (Apache-2.0), gasket-driver (GPL-2.0, it is a kernel module),
 CPython (PSF), SQLite (public domain), Ubuntu's toolchain packages (each their

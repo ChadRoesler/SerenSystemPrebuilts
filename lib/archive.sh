@@ -246,7 +246,7 @@ write_notices() {
     local f="$PLATFORM_DIR/NOTICES"
     {
         echo "SerenSystemPrebuilts - ${PLATFORM_TAG}/${JP_FAMILY} - NOTICES"
-        echo "Generated $(date -Iseconds). The build scripts are GPL-3.0-or-later;"
+        echo "Generated $(date -Iseconds). The build scripts are AGPL-3.0-or-later;"
         echo "everything in this folder is built from the projects below, under their terms."
         echo ""
         ls "$PLATFORM_DIR"/torch-*.whl >/dev/null 2>&1 && \
