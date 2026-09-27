@@ -22,6 +22,7 @@ artifacts for an `sm_121` GPU. Pass `--platform spark` and it stops asking.
 | Artifact | Notes |
 |---|---|
 | `llama-server-<jp>-<platform>-aarch64` | llama.cpp server binary built with CUDA for the detected platform |
+| `whisper-server-<jp>-<platform>-aarch64` | whisper.cpp speech-to-text server, the same static CUDA build as llama-server (`--whisper`, pinned in `lib/pins.sh`) |
 | `torch-<ver>-cp3XX-*.whl` | PyTorch wheel, built from source against this box's CUDA arch |
 | `torchvision-<ver>-cp3XX-*.whl` | torchvision wheel (compiled against the torch above) |
 | `gasket-<jp>-<platform>-aarch64.ko` | Coral TPU gasket kernel module |
@@ -148,6 +149,7 @@ Example output names:
 
 - `llama-server-jp7-spark-aarch64`
 - `llama-server-jp5-xavier-aarch64`
+- `whisper-server-jp6-orin-aarch64`
 - `gasket-jp5-xavier-aarch64.ko`
 - `apex-jp6-orin-aarch64.ko`
 

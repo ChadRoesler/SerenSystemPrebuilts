@@ -35,6 +35,9 @@
 #
 # A ref here is whatever `git checkout` accepts: a tag, a branch, or a SHA.
 LLAMA_REF_DEFAULT="v0.4.1"
+# whisper.cpp: the release current on 26 Sept 2026, when the phase was added.
+# Bump the same way as llama.cpp: deliberately, with a --whisper run per box.
+WHISPER_REF_DEFAULT="v1.9.4"
 GASKET_REF_DEFAULT="5815ee3908a46a415aac616ac7b9aedcb98a504c"
 
 # resolve_ref USER_VALUE DEFAULT
