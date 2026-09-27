@@ -81,6 +81,7 @@ unset _seren_part
 # Defaults & flag parsing
 # ─────────────────────────────────────────────────────────────
 BUILD_LLAMA=false
+BUILD_WHISPER=false
 BUILD_PYTORCH=false
 BUILD_TORCHVISION=false
 BUILD_CORAL=false
@@ -113,6 +114,7 @@ USER_BNB_VERSION=""
 KEEP_SOURCES=false
 VLLM_WHEEL_ONLY=false
 USER_LLAMA_REF=""
+USER_WHISPER_REF=""
 USER_GASKET_REF=""
 USER_BUILD_DIR=""
 USER_OUTPUT_DIR=""
@@ -127,6 +129,7 @@ SEREN_ORIGINAL_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --llama)        BUILD_LLAMA=true; shift ;;
+        --whisper)      BUILD_WHISPER=true; shift ;;
         --pytorch)      BUILD_PYTORCH=true; shift ;;
         --torchvision)  BUILD_TORCHVISION=true; shift ;;
         --coral)        BUILD_CORAL=true; shift ;;
@@ -155,6 +158,7 @@ while [[ $# -gt 0 ]]; do
         --keep-sources) KEEP_SOURCES=true; shift ;;
         --vllm-wheel-only) VLLM_WHEEL_ONLY=true; shift ;;
         --llama-ref)    USER_LLAMA_REF="$2"; shift 2 ;;
+        --whisper-ref)  USER_WHISPER_REF="$2"; shift 2 ;;
         --gasket-ref)   USER_GASKET_REF="$2"; shift 2 ;;
         # --all MEANS ALL, which it did not. It set four of seven, so the
         # two Xavier-only tarballs and bitsandbytes were silently absent from
@@ -162,7 +166,7 @@ while [[ $# -gt 0 ]]; do
         # job is completeness. Phases the platform does not support skip with a
         # reason of their own; that is the right place for that decision, not
         # a flag that quietly means "most".
-        --all)          BUILD_LLAMA=true; BUILD_PYTORCH=true; BUILD_TORCHVISION=true
+        --all)          BUILD_LLAMA=true; BUILD_WHISPER=true; BUILD_PYTORCH=true; BUILD_TORCHVISION=true
                         BUILD_CORAL=true; BUILD_PYTHON=true; BUILD_SQLITE=true
                         BUILD_BITSANDBYTES=true; BUILD_VENDOR=true
                         BUILD_VLLM=true; BUILD_WHEELHOUSE=true
@@ -417,6 +421,7 @@ ensure_jq
 # `--gasket-ref latest` follows upstream HEAD; the resolved SHA is recorded
 # in the provenance either way.
 LLAMA_REF="$(resolve_ref "$USER_LLAMA_REF" "$LLAMA_REF_DEFAULT")"
+WHISPER_REF="$(resolve_ref "$USER_WHISPER_REF" "$WHISPER_REF_DEFAULT")"
 GASKET_REF="$(resolve_ref "$USER_GASKET_REF" "$GASKET_REF_DEFAULT")"
 
 # ─────────────────────────────────────────────────────────────
@@ -437,7 +442,7 @@ log "Max jobs:    $RESOLVED_MAX_JOBS$([ -z "$USER_MAX_JOBS" ] && echo ' (auto, a
 # EVERY flag, not four of six. This line said
     #   llama=false pytorch=false torchvision=false coral=false
     # during a bitsandbytes build, which reads as "building nothing".
-log "Building:    llama=$BUILD_LLAMA pytorch=$BUILD_PYTORCH torchvision=$BUILD_TORCHVISION coral=$BUILD_CORAL"
+log "Building:    llama=$BUILD_LLAMA whisper=$BUILD_WHISPER pytorch=$BUILD_PYTORCH torchvision=$BUILD_TORCHVISION coral=$BUILD_CORAL"
 log "             python=$BUILD_PYTHON sqlite=$BUILD_SQLITE bitsandbytes=$BUILD_BITSANDBYTES"
 log "             vllm=$BUILD_VLLM vendor=$BUILD_VENDOR"
 log "             wheelhouse=$BUILD_WHEELHOUSE cuda-debs=$BUILD_CUDADEBS selftest=$BUILD_SELFTEST"
@@ -486,6 +491,7 @@ fi
 need_python310=false
 need_nvcc=false
 $BUILD_LLAMA       && need_nvcc=true
+$BUILD_WHISPER     && need_nvcc=true
 $BUILD_PYTORCH     && { need_python310=true; need_nvcc=true; }
 $BUILD_TORCHVISION && { need_python310=true; need_nvcc=true; }
 # It compiles .cu sources, so it needs the toolkit just as much as the others.
@@ -494,6 +500,7 @@ $BUILD_BITSANDBYTES && { need_python310=true; need_nvcc=true; }
 # 430MB into a git clone.
 need_cmake=false
 $BUILD_LLAMA        && need_cmake=true
+$BUILD_WHISPER      && need_cmake=true
 $BUILD_PYTORCH      && need_cmake=true
 $BUILD_TORCHVISION  && need_cmake=true
 $BUILD_BITSANDBYTES && need_cmake=true
@@ -586,6 +593,7 @@ fi
     echo "baseline vllm          ${VLLM_VERSION:-<unsupported on this GPU>}"
     echo "baseline vllm-torch    ${VLLM_TORCH_VERSION} (vLLM's own venv, not the one above)"
     echo "baseline llama.cpp     $(describe_ref "$LLAMA_REF")"
+    echo "baseline whisper.cpp   $(describe_ref "$WHISPER_REF")"
     echo "baseline gasket        $(describe_ref "$GASKET_REF")"
     echo ""
 } >> "$PROVENANCE"
@@ -620,7 +628,7 @@ SEREN_APT_BUILD_DEPS=(
     # that only exists on the box that discovered it is not a fix.
     libopenblas0-openmp
 )
-if ! $DO_VERIFY && { $BUILD_LLAMA || $BUILD_PYTORCH || $BUILD_TORCHVISION || $BUILD_BITSANDBYTES; }; then
+if ! $DO_VERIFY && { $BUILD_LLAMA || $BUILD_WHISPER || $BUILD_PYTORCH || $BUILD_TORCHVISION || $BUILD_BITSANDBYTES; }; then
     apt_require "${SEREN_APT_BUILD_DEPS[@]}"
     ensure_openblas_openmp
 fi
@@ -785,6 +793,7 @@ declare -a PHASE_TABLE=(
     "python|BUILD_PYTHON|python_${JP_FAMILY}_${PLATFORM_TAG}|build_python|sqlite"
     # independent of the python stack entirely: C++ and a kernel module
     "llama|BUILD_LLAMA|llama_${PLATFORM_TAG}|build_llama|"
+    "whisper|BUILD_WHISPER|whisper_${PLATFORM_TAG}|build_whisper|"
     "coral|BUILD_CORAL|coral_${JP_FAMILY}_${PLATFORM_TAG}|build_coral|"
     # independent of everything, and the one thing nobody else can rebuild
     "cudadebs|BUILD_CUDADEBS|cudadebs_${JP_FAMILY}_${PLATFORM_TAG}|build_cudadebs|"
@@ -823,7 +832,7 @@ done
 # "no space" on the one box that needs the archive most. So it stays a choice,
 # made loudly, while it is still free to make.
 if ! $DO_VERIFY && ! $KEEP_SOURCES && \
-   { $BUILD_LLAMA || $BUILD_PYTORCH || $BUILD_TORCHVISION || $BUILD_BITSANDBYTES || $BUILD_VLLM; }; then
+   { $BUILD_LLAMA || $BUILD_WHISPER || $BUILD_PYTORCH || $BUILD_TORCHVISION || $BUILD_BITSANDBYTES || $BUILD_VLLM; }; then
     warn "--keep-sources was NOT passed: the source trees will be discarded."
     warn "  You will get wheels and binaries, and no way to rebuild them if an"
     warn "  upstream tag, repo or index goes away - which is the exact failure"

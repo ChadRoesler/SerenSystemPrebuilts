@@ -9,6 +9,7 @@ Usage: $0 [BUILD FLAGS] [OPTIONS]
 
 Build flags (combine freely):
   --llama              Build llama-server binary (~10 min)
+  --whisper            Build whisper-server binary (speech to text, ~5 min)
   --pytorch            Build PyTorch wheel (hours; ~20 on an 8GB Nano at two
                        jobs, ~12 on a Xavier, ~1 on the Spark). The version is
                        the platform's held baseline in lib/platform.sh:
@@ -149,6 +150,7 @@ Options:
                        of the pinned default in lib/pins.sh. `latest` follows
                        master HEAD. The resolved SHA is recorded either way.
   --gasket-ref REF     Same, for google/gasket-driver.
+  --whisper-ref REF    Same, for ggml-org/whisper.cpp (default in lib/pins.sh).
   --cuda-host-compiler PATH
                        Which g++ nvcc hands the C++ to. The distro default is
                        usually right and sometimes is not: nvcc runs its own

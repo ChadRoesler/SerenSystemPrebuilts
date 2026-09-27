@@ -199,11 +199,13 @@ PYSUITE
 # about and neither shows up in a pip install.
 seren_binary_checks() {
     local dir="$1" rc=0 f v
-    for f in "$dir"/llama-server-*; do
+    # whisper-server is the same shape of binary as llama-server (same ggml,
+    # same static link), so it gets the same two questions.
+    for f in "$dir"/llama-server-* "$dir"/whisper-server-*; do
         [ -f "$f" ] || continue
         if ldd "$f" 2>/dev/null | grep -q "not found"; then
             ldd "$f" | grep "not found" >&2
-            warn "  FAIL  llama-server is missing shared libraries (above)"
+            warn "  FAIL  $(basename "$f") is missing shared libraries (above)"
             rc=1
         elif "$f" --version >/dev/null 2>&1 || "$f" --help >/dev/null 2>&1; then
             log "  PASS  $(basename "$f") runs and resolves its libraries"
