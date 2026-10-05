@@ -264,6 +264,7 @@ build_python() {
     ./configure \
         --prefix=/usr/local \
         --enable-optimizations \
+        --enable-loadable-sqlite-extensions \
         CFLAGS="${extra_cflags}" \
         LDFLAGS="${extra_ldflags}"
     LD_RUN_PATH="$run_path" make -j"$MAX_JOBS"

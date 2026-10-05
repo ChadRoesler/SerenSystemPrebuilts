@@ -62,7 +62,10 @@ build_python() {
         warn "If you want a modern bundled sqlite3 module, run --sqlite BEFORE --python"
     fi
 
-    ./configure --enable-optimizations --prefix=/usr/local
+    # --enable-loadable-sqlite-extensions: without it sqlite3.Connection has
+    # no enable_load_extension, sqlite-vec cannot load, and SerenLoci's hybrid
+    # finder silently stays lexical (found on the NUC, 5 Oct 2026).
+    ./configure --enable-optimizations --enable-loadable-sqlite-extensions --prefix=/usr/local
     make -j"$RESOLVED_MAX_JOBS"
 
     # Sanity-check: make sure the build actually picked up modern sqlite3
