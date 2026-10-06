@@ -39,6 +39,14 @@ LLAMA_REF_DEFAULT="v0.4.1"
 # Bump the same way as llama.cpp: deliberately, with a --whisper run per box.
 WHISPER_REF_DEFAULT="v1.9.4"
 GASKET_REF_DEFAULT="5815ee3908a46a415aac616ac7b9aedcb98a504c"
+# The Coral userspace pair (phases/edgetpu.sh): tflite_runtime and libedgetpu
+# MUST come from the same TensorFlow, so these two move together or not at
+# all. v2.17.1 / 16.0TF2.17.1-1 is the pair proven on the Orin Nano on
+# 5 Oct 2026 (delegate loaded, MobileNet V2 at 3.2 ms on the TPU). To bump:
+# pick a libedgetpu tag, read the TensorFlow version out of its name, set
+# both, and run --edgetpu on a box that has a TPU.
+TFLITE_REF_DEFAULT="v2.17.1"
+LIBEDGETPU_REF_DEFAULT="16.0TF2.17.1-1"
 
 # resolve_ref USER_VALUE DEFAULT
 #   empty  -> the default (pinned)

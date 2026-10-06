@@ -85,6 +85,7 @@ BUILD_WHISPER=false
 BUILD_PYTORCH=false
 BUILD_TORCHVISION=false
 BUILD_CORAL=false
+BUILD_EDGETPU=false
 BUILD_PYTHON=false
 BUILD_SQLITE=false
 BUILD_BITSANDBYTES=false
@@ -116,6 +117,8 @@ VLLM_WHEEL_ONLY=false
 USER_LLAMA_REF=""
 USER_WHISPER_REF=""
 USER_GASKET_REF=""
+USER_TFLITE_REF=""
+USER_LIBEDGETPU_REF=""
 USER_BUILD_DIR=""
 USER_OUTPUT_DIR=""
 USER_MAX_JOBS=""
@@ -133,6 +136,7 @@ while [[ $# -gt 0 ]]; do
         --pytorch)      BUILD_PYTORCH=true; shift ;;
         --torchvision)  BUILD_TORCHVISION=true; shift ;;
         --coral)        BUILD_CORAL=true; shift ;;
+        --edgetpu)      BUILD_EDGETPU=true; shift ;;
         --python)       BUILD_PYTHON=true; shift ;;
         --sqlite)       BUILD_SQLITE=true; shift ;;
         --bitsandbytes) BUILD_BITSANDBYTES=true; shift ;;
@@ -160,6 +164,8 @@ while [[ $# -gt 0 ]]; do
         --llama-ref)    USER_LLAMA_REF="$2"; shift 2 ;;
         --whisper-ref)  USER_WHISPER_REF="$2"; shift 2 ;;
         --gasket-ref)   USER_GASKET_REF="$2"; shift 2 ;;
+        --tflite-ref)   USER_TFLITE_REF="$2"; shift 2 ;;
+        --libedgetpu-ref) USER_LIBEDGETPU_REF="$2"; shift 2 ;;
         # --all MEANS ALL, which it did not. It set four of seven, so the
         # two Xavier-only tarballs and bitsandbytes were silently absent from
         # every "full" build - which is a bad shape for an archive whose whole
@@ -167,7 +173,7 @@ while [[ $# -gt 0 ]]; do
         # reason of their own; that is the right place for that decision, not
         # a flag that quietly means "most".
         --all)          BUILD_LLAMA=true; BUILD_WHISPER=true; BUILD_PYTORCH=true; BUILD_TORCHVISION=true
-                        BUILD_CORAL=true; BUILD_PYTHON=true; BUILD_SQLITE=true
+                        BUILD_CORAL=true; BUILD_EDGETPU=true; BUILD_PYTHON=true; BUILD_SQLITE=true
                         BUILD_BITSANDBYTES=true; BUILD_VENDOR=true
                         BUILD_VLLM=true; BUILD_WHEELHOUSE=true
                         BUILD_CUDADEBS=true; BUILD_SELFTEST=true; shift ;;
@@ -423,6 +429,8 @@ ensure_jq
 LLAMA_REF="$(resolve_ref "$USER_LLAMA_REF" "$LLAMA_REF_DEFAULT")"
 WHISPER_REF="$(resolve_ref "$USER_WHISPER_REF" "$WHISPER_REF_DEFAULT")"
 GASKET_REF="$(resolve_ref "$USER_GASKET_REF" "$GASKET_REF_DEFAULT")"
+TFLITE_REF="$(resolve_ref "$USER_TFLITE_REF" "$TFLITE_REF_DEFAULT")"
+LIBEDGETPU_REF="$(resolve_ref "$USER_LIBEDGETPU_REF" "$LIBEDGETPU_REF_DEFAULT")"
 
 # ─────────────────────────────────────────────────────────────
 # Banner + prereqs
@@ -504,6 +512,7 @@ $BUILD_WHISPER      && need_cmake=true
 $BUILD_PYTORCH      && need_cmake=true
 $BUILD_TORCHVISION  && need_cmake=true
 $BUILD_BITSANDBYTES && need_cmake=true
+$BUILD_EDGETPU      && need_cmake=true
 
 CUDA_HOME="$(resolve_cuda_home || true)"
 if [ -n "$CUDA_HOME" ]; then
@@ -795,6 +804,9 @@ declare -a PHASE_TABLE=(
     "llama|BUILD_LLAMA|llama_${PLATFORM_TAG}|build_llama|"
     "whisper|BUILD_WHISPER|whisper_${PLATFORM_TAG}|build_whisper|"
     "coral|BUILD_CORAL|coral_${JP_FAMILY}_${PLATFORM_TAG}|build_coral|"
+    # the userspace half of the TPU: a matched libedgetpu + tflite_runtime.
+    # Needs this platform's Python (the wheel is built for it) and nothing else.
+    "edgetpu|BUILD_EDGETPU|edgetpu_${JP_FAMILY}_${PLATFORM_TAG}|build_edgetpu|python"
     # independent of everything, and the one thing nobody else can rebuild
     "cudadebs|BUILD_CUDADEBS|cudadebs_${JP_FAMILY}_${PLATFORM_TAG}|build_cudadebs|"
     # the python stack, in the only order that works

@@ -18,6 +18,10 @@ Build flags (combine freely):
   --torchvision        Build torchvision wheel (~30 min, needs the torch above)
                        0.16.0 on jp5/Xavier, 0.26.0 on jp6 and jp7.
   --coral              Build Coral TPU kernel modules (gasket + apex, ~5 min)
+  --edgetpu            Build the Coral userspace pair from source: libedgetpu
+                       and the tflite_runtime wheel it is built for (~15 min
+                       on a Nano). Google's apt repo is gone and PyPI's wheel
+                       has no matching library; see phases/edgetpu.sh.
   --python             Build the baseline Python from python.org source
                        (~30 min). EVERY platform, not just Xavier: "the distro
                        ships one" is a statement about today, and deadsnakes or
@@ -151,6 +155,9 @@ Options:
                        master HEAD. The resolved SHA is recorded either way.
   --gasket-ref REF     Same, for google/gasket-driver.
   --whisper-ref REF    Same, for ggml-org/whisper.cpp (default in lib/pins.sh).
+  --tflite-ref REF     The TensorFlow tag --edgetpu builds tflite_runtime from.
+  --libedgetpu-ref REF The libedgetpu tag --edgetpu builds. Built for ONE
+                       TensorFlow: change it together with --tflite-ref.
   --cuda-host-compiler PATH
                        Which g++ nvcc hands the C++ to. The distro default is
                        usually right and sometimes is not: nvcc runs its own

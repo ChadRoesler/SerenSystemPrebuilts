@@ -259,6 +259,10 @@ write_notices() {
             echo "vllm/*.whl                       vLLM                       Apache-2.0     github.com/vllm-project/vllm"
         ls "$PLATFORM_DIR"/gasket-*.ko >/dev/null 2>&1 && \
             echo "gasket-*.ko, apex-*.ko           gasket-driver (kernel)     GPL-2.0        github.com/google/gasket-driver"
+        ls "$PLATFORM_DIR"/libedgetpu-*.so >/dev/null 2>&1 && \
+            echo "libedgetpu-*.so                  libedgetpu (+ abseil, flatbuffers, static)  Apache-2.0  github.com/feranick/libedgetpu (Google's, carried forward)"
+        ls "$PLATFORM_DIR"/tflite_runtime-*.whl >/dev/null 2>&1 && \
+            echo "tflite_runtime-*.whl             TensorFlow Lite runtime    Apache-2.0     github.com/tensorflow/tensorflow"
         ls "$PLATFORM_DIR"/python*.tar.gz >/dev/null 2>&1 && \
             echo "python*.tar.gz                   CPython                    PSF-2.0        python.org"
         ls "$PLATFORM_DIR"/sqlite*.tar.gz >/dev/null 2>&1 && \
