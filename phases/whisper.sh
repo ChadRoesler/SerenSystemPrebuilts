@@ -13,8 +13,8 @@
 # Orin Nano. whisper.cpp is llama.cpp's sibling - the same ggml, the same
 # CMake switches, the same CUDA arch - so this phase is llama.sh with the
 # names changed, and it ships one static binary the node only has to copy
-# (Design note: "if we dont have to build whisper we wont... but if
-# they are similar enough we are kosher").
+# (if whisper need not be built it is not built; the two are similar
+# enough to share a phase).
 #
 # whisper-server answers multipart POSTs on --inference-path; the node
 # installer points that at /v1/audio/transcriptions, so an OpenAI-style

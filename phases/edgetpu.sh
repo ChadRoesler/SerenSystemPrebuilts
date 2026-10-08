@@ -15,7 +15,7 @@
 #
 # Both must be built from the same TensorFlow, or the delegate does not load.
 #
-# WHY THIS IS A PREBUILT (Design note:). Everything upstream of it went
+# WHY THIS IS A PREBUILT. Everything upstream of it went
 # away or stopped moving:
 #   - Google's Coral apt repo answers 403 for every file under
 #     packages.cloud.google.com/apt/dists/coral-edgetpu-stable (seen that day;
